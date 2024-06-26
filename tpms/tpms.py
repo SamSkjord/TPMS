@@ -1,13 +1,9 @@
-# tpms/tpms.py
 import serial
 import time
-import threading
 import logging
-import platform
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
 
 class TPMS:
@@ -19,404 +15,142 @@ class TPMS:
         pressure_unit="kPa",
         hardware_version="TY06",
     ):
-        self.ser = None
+        self.port = port or self.auto_detect_port()
         self.baudrate = baudrate
-        self.is_seed_ack_ok = False
-        self.error_count = 0
-        self.start_data_time = -1
-        self.high_press_stamp = 310
-        self.low_press_stamp = 180
-        self.hi_temp_stamp = 75
-        self.front_left = None
-        self.front_right = None
-        self.back_left = None
-        self.back_right = None
-        self.spare_tire = None
+        self.temp_unit = temp_unit
+        self.pressure_unit = pressure_unit
+        self.hardware_version = hardware_version
+        self.ser = None
         self.incoming_buffer = bytearray()
-        self.hardware_version = hardware_version.upper()
 
-        # Set default port based on the operating system if not provided
-        if port is None:
-            if platform.system() == "Windows":
-                self.port = "COM1"  # Default COM port on Windows
-            elif platform.system() == "Darwin":
-                self.port = "/dev/tty.usbserial"  # Default port on macOS
-            else:
-                self.port = "/dev/ttyUSB0"  # Default port on Linux
-        else:
-            self.port = port
-
-        # Configuration for temperature and pressure units
-        self.config = {
-            "temperature_unit": temp_unit,  # Options: "Celsius", "Fahrenheit"
-            "pressure_unit": pressure_unit,  # Options: "kPa", "psi", "bar"
+        # TPMS command frames
+        self.querySensorID = bytearray([0x55, 0xAA, 0x06, 0x07, 0x00, 0x00, 0x0C])
+        self.eventACK = bytearray([0x55, 0xAA, 0x06, 0x00, 0x00, 0x00])
+        self.heartbeat_frame = bytearray([0x55, 0xAA, 0x06, 0x19, 0x00, 0xE0])
+        self.pairing_frames = {
+            "left_back": bytearray([0x55, 0xAA, 0x06, 0x01, 0x10, 0x00]),
+            "right_back": bytearray([0x55, 0xAA, 0x06, 0x01, 0x11, 0x00]),
+            "front_left": bytearray([0x55, 0xAA, 0x06, 0x01, 0x00, 0x00]),
+            "front_right": bytearray([0x55, 0xAA, 0x06, 0x01, 0x01, 0x00]),
+            "spare": bytearray([0x55, 0xAA, 0x06, 0x01, 0x05, 0x00]),
         }
+        self.stop_pairing_frame = bytearray([0x55, 0xAA, 0x06, 0x06, 0x00, 0x00])
+        self.reset_frame = bytearray([0x55, 0xAA, 0x06, 0x58, 0x55, 0xE0])
+
+    def auto_detect_port(self):
+        import platform
+
+        os_type = platform.system()
+        if os_type == "Linux":
+            return "/dev/ttyUSB0"
+        elif os_type == "Darwin":  # macOS
+            return "/dev/tty.usbserial-10"
+        elif os_type == "Windows":
+            return "COM3"
+        else:
+            raise ValueError("Unsupported OS")
 
     def connect(self):
-        """
-        Attempts to establish a connection to the serial device.
-        Retries every 2 seconds if the connection fails.
-        """
         while True:
             try:
-                logger.info(f"Connecting to serial port {self.port}...")
-                self.ser = serial.Serial(self.port, self.baudrate, timeout=5)
-                logger.info("Connected to serial port.")
+                logger.info("Connecting to TPMS device...")
+                self.ser = serial.Serial(self.port, self.baudrate)
+                self.ser.timeout = 5
                 return
-            except serial.SerialException:
-                logger.warning(
-                    "Failed to connect to serial port. Retrying in 2 seconds..."
-                )
+            except serial.SerialException as e:
+                logger.error(f"Connection failed: {e}. Retrying in 2 seconds...")
                 time.sleep(2)
 
-    def send(self, frame):
-        """
-        Sends a byte frame to the serial device.
+    def send_heartbeat(self):
+        try:
+            self.ser.write(self.heartbeat_frame)
+            logger.info("Heartbeat signal sent.")
+        except serial.SerialException as e:
+            logger.error(f"Failed to send heartbeat: {e}")
 
-        Parameters:
-        frame (bytearray): The byte frame to send.
-        """
+    def send_encryption(self, seed):
+        frame = bytearray([0x55, 0xAA, 0x06, 0x5B, seed, 0xE0])
         try:
             self.ser.write(frame)
-            time.sleep(0.06)  # Sleep for 60 ms to mimic the behavior in Java code
+            logger.info("Encryption frame sent.")
         except serial.SerialException as e:
-            logger.error(f"Failed to send frame: {e}")
+            logger.error(f"Failed to send encryption frame: {e}")
 
-    @staticmethod
-    def calc_cc(buf):
-        """
-        Verifies the checksum (CC) for a given byte buffer.
+    def pair_left_back(self):
+        self.ser.write(self.pairing_frames["left_back"])
+        logger.info("Pairing command for left back tire sent.")
 
-        Parameters:
-        buf (bytearray): The byte buffer to verify the checksum for.
+    def pair_right_back(self):
+        self.ser.write(self.pairing_frames["right_back"])
+        logger.info("Pairing command for right back tire sent.")
 
-        Returns:
-        bool: True if the checksum is correct, False otherwise.
-        """
-        datalen = buf[2]
-        if datalen == 0:
-            logger.error(f"Invalid data length: {buf}")
-            return False
-        elif TPMS.sum_cc(buf) == buf[datalen - 1]:
-            return True
-        else:
-            return False
+    def pair_front_left(self):
+        self.ser.write(self.pairing_frames["front_left"])
+        logger.info("Pairing command for front left tire sent.")
 
-    @staticmethod
-    def sum_cc(buf):
-        """
-        Calculates the checksum (CC) for a given byte buffer.
+    def pair_front_right(self):
+        self.ser.write(self.pairing_frames["front_right"])
+        logger.info("Pairing command for front right tire sent.")
 
-        Parameters:
-        buf (bytearray): The byte buffer to calculate the checksum for.
+    def pair_spare(self):
+        self.ser.write(self.pairing_frames["spare"])
+        logger.info("Pairing command for spare tire sent.")
 
-        Returns:
-        byte: The calculated checksum.
-        """
-        datalen = buf[2]
-        calc = buf[0]
-        for i in range(1, datalen - 1):
-            calc ^= buf[i]
-        return calc
-
-    @staticmethod
-    def erase(buf, n):
-        """
-        Erases n bytes from the beginning of the buffer.
-
-        Parameters:
-        buf (bytearray): The byte buffer to erase bytes from.
-        n (int): The number of bytes to erase.
-
-        Returns:
-        bytearray: The buffer with n bytes erased from the beginning.
-        """
-        return buf[n:]
-
-    def protocol_frame_filter(self, buf):
-        """
-        Filters and processes protocol frames.
-
-        Parameters:
-        buf (bytearray): The byte buffer to filter and process.
-
-        Returns:
-        list: A list of valid protocol frames.
-        """
-        frames = []
-        while len(buf) >= 3:
-            if buf[0] == 85 and buf[1] == 170:
-                framelen = buf[2]
-                if framelen > len(buf):
-                    break
-                if self.calc_cc(buf[:framelen]):
-                    frames.append(buf[:framelen])
-                    buf = self.erase(buf, framelen)
-                else:
-                    buf = self.erase(buf, 1)
-            else:
-                buf = self.erase(buf, 1)
-        return frames, buf
+    def stop_pairing(self):
+        self.ser.write(self.stop_pairing_frame)
+        logger.info("Stop pairing command sent.")
 
     def decode_frame(self, frame):
-        """
-        Decodes the raw frame data into a meaningful event.
+        if len(frame) < 7:
+            logger.warning(f"Incomplete frame received: {frame.hex()}")
+            return None
 
-        Parameters:
-        frame (bytearray): The raw frame data.
-
-        Returns:
-        dict: The decoded event.
-        """
         cmd = frame[2]
-        if cmd == 8:
+        if cmd == 0x08:  # Tire status
             return self.decode_tire_status(frame)
-        elif cmd == 6:
-            if frame[3] == 24:
-                return self.decode_pairing_ack(frame)
-            elif frame[3] == 0 and frame[4] == 136:  # -120 as unsigned
-                return self.decode_heartbeat_event()
-            elif frame[3] == -75:
-                return self.decode_time_seed_event(frame)
-        elif cmd == 9:
+        elif cmd == 0x09:  # Query ID response
             return self.decode_query_id(frame)
-        elif cmd == 7 and frame[3] == 48:
-            return self.decode_tire_exchange(frame)
-        return None
+        else:
+            logger.warning(f"Unknown command received: {cmd} in frame {frame.hex()}")
+            return None
 
     def decode_tire_status(self, frame):
-        """
-        Decodes the tire status frame.
-
-        Parameters:
-        frame (bytearray): The raw frame data.
-
-        Returns:
-        dict: The decoded tire status event.
-        """
-        tire_position = frame[3]
-        pressure = frame[4] * 3.44  # Pressure in kPa
-        temperature = frame[5] - 50  # Temperature in Celsius
-        status_byte = frame[6]
-
-        # Convert pressure to the desired unit
-        if self.config["pressure_unit"] == "psi":
-            pressure *= 0.1450377
-        elif self.config["pressure_unit"] == "bar":
-            pressure /= 100
-
-        # Convert temperature to the desired unit
-        if self.config["temperature_unit"] == "Fahrenheit":
-            temperature = temperature * 9 / 5 + 32
-
-        status = {
-            "low_power": bool(status_byte & 0x10),
-            "leakage": bool(status_byte & 0x08),
-            "no_signal": bool(status_byte & 0x20),
-        }
-
-        return {
-            "type": "tire_status",
-            "tire_position": tire_position,
-            "pressure": pressure,
-            "temperature": temperature,
-            "status": status,
-        }
-
-    @staticmethod
-    def decode_pairing_ack(frame):
-        """
-        Decodes the pairing acknowledgment frame.
-
-        Parameters:
-        frame (bytearray): The raw frame data.
-
-        Returns:
-        dict: The decoded pairing acknowledgment event.
-        """
-        tire_position = frame[4]
         tire_positions = {
             0: "Left Rear",
             1: "Right Front",
-            16: "Left Front",
+            16: "Left Rear",
             17: "Right Rear",
             5: "Spare",
         }
-        return {
-            "type": "pairing_ack",
-            "tire_position": tire_positions.get(tire_position, "Unknown"),
-        }
-
-    @staticmethod
-    def decode_heartbeat_event():
-        """
-        Decodes the heartbeat event frame.
-
-        Returns:
-        dict: The decoded heartbeat event.
-        """
-        return {"type": "heartbeat"}
-
-    @staticmethod
-    def decode_time_seed_event(frame):
-        """
-        Decodes the time seed event frame.
-
-        Parameters:
-        frame (bytearray): The raw frame data.
-
-        Returns:
-        dict: The decoded time seed event.
-        """
-        seed = frame[4]
-        return {"type": "time_seed", "seed": seed}
-
-    @staticmethod
-    def decode_query_id(frame):
-        """
-        Decodes the query ID response frame.
-
-        Parameters:
-        frame (bytearray): The raw frame data.
-
-        Returns:
-        dict: The decoded query ID response event.
-        """
         tire_position = frame[3]
-        id_bytes = frame[4:8]
-        tire_id = "".join(format(x, "02x") for x in id_bytes).upper()
-        tire_positions = {
-            1: "Left Front",
-            2: "Right Front",
-            3: "Left Rear",
-            4: "Right Rear",
-            5: "Spare",
-        }
+        pressure = frame[4] * 3.44
+        temperature = frame[5] - 50
+        status = frame[6]
+
+        no_signal = bool(status & 0b00100000)
+        if no_signal:
+            logger.warning(f"Sensor signal lost for tire position {tire_position}.")
+            return {
+                "tire_position": tire_position,
+                "pressure": None,  # Invalidate pressure
+                "temperature": None,  # Invalidate temperature
+                "status": {
+                    "low_power": bool(status & 0b00010000),
+                    "leakage": bool(status & 0b00001000),
+                    "no_signal": no_signal,
+                },
+            }
+
         return {
-            "type": "query_id",
-            "tire_position": tire_positions.get(tire_position, "Unknown"),
-            "tire_id": tire_id,
+            "tire_position": tire_position,
+            "pressure": pressure,
+            "temperature": temperature,
+            "status": {
+                "low_power": bool(status & 0b00010000),
+                "leakage": bool(status & 0b00001000),
+                "no_signal": no_signal,
+            },
         }
-
-    @staticmethod
-    def decode_tire_exchange(frame):
-        """
-        Decodes the tire exchange frame.
-
-        Parameters:
-        frame (bytearray): The raw frame data.
-
-        Returns:
-        dict: The decoded tire exchange event.
-        """
-        exchange_map = {
-            (0, 1): "Left Front - Right Front",
-            (0, 16): "Left Front - Left Rear",
-            (0, 17): "Left Front - Right Rear",
-            (1, 16): "Right Front - Left Rear",
-            (1, 17): "Right Front - Right Rear",
-            (16, 17): "Left Rear - Right Rear",
-            (0, 5): "Left Front - Spare",
-            (1, 5): "Right Front - Spare",
-            (16, 5): "Left Rear - Spare",
-            (17, 5): "Right Rear - Spare",
-        }
-        exchange = exchange_map.get((frame[4], frame[5]), "Unknown Exchange")
-        return {"type": "tire_exchange", "exchange": exchange}
-
-    def heartbeat(self):
-        """
-        Sends a heartbeat signal and encryption seed.
-        """
-        self.send_heartbeat()
-        self.send_encryption(int(time.time()) & 0xFF)
-        threading.Timer(1, self.heartbeat).start()
-
-    def send_heartbeat(self):
-        if self.hardware_version == "TY06":
-            self.send(bytearray([85, 170, 6, 25, 0, 224]))
-        elif self.hardware_version == "TY05":
-            self.send(bytearray([85, 170, 6, 24, 0, 223]))
-
-    def send_encryption(self, seed):
-        if self.hardware_version == "TY06":
-            self.send(bytearray([85, 170, 6, 91, seed, 224]))
-        elif self.hardware_version == "TY05":
-            self.send(bytearray([85, 170, 6, 90, seed, 223]))
-
-    def pair_back_left(self):
-        logger.info("Pairing back left tire ID")
-        if self.hardware_version == "TY06":
-            self.send(bytearray([85, 170, 6, 1, 16, 0]))
-        elif self.hardware_version == "TY05":
-            self.send(bytearray([85, 170, 6, 1, 16, 1]))
-
-    def pair_back_right(self):
-        logger.info("Pairing back right tire ID")
-        if self.hardware_version == "TY06":
-            self.send(bytearray([85, 170, 6, 1, 17, 0]))
-        elif self.hardware_version == "TY05":
-            self.send(bytearray([85, 170, 6, 1, 17, 1]))
-
-    def pair_front_left(self):
-        logger.info("Pairing front left tire ID")
-        if self.hardware_version == "TY06":
-            self.send(bytearray([85, 170, 6, 1, 0, 0]))
-        elif self.hardware_version == "TY05":
-            self.send(bytearray([85, 170, 6, 1, 0, 1]))
-
-    def pair_front_right(self):
-        logger.info("Pairing front right tire ID")
-        if self.hardware_version == "TY06":
-            self.send(bytearray([85, 170, 6, 1, 1, 0]))
-        elif self.hardware_version == "TY05":
-            self.send(bytearray([85, 170, 6, 1, 1, 1]))
-
-    def pair_spare(self):
-        logger.info("Pairing spare tire ID")
-        if self.hardware_version == "TY06":
-            self.send(bytearray([85, 170, 6, 1, 5, 0]))
-        elif self.hardware_version == "TY05":
-            self.send(bytearray([85, 170, 6, 1, 5, 1]))
-
-    def stop_pairing(self):
-        logger.info("Stopping pairing")
-        if self.hardware_version == "TY06":
-            self.send(bytearray([85, 170, 6, 6, 0, 0]))
-        elif self.hardware_version == "TY05":
-            self.send(bytearray([85, 170, 6, 6, 0, 1]))
-
-    def send_time_seed(self):
-        logger.info("Sending time seed...")
-        if not self.is_seed_ack_ok:
-            if self.hardware_version == "TY06":
-                self.send(bytearray([85, 170, 6, 91, int(time.time()) & 255, 224]))
-            elif self.hardware_version == "TY05":
-                self.send(bytearray([85, 170, 6, 90, int(time.time()) & 255, 223]))
-        self.error_count = 0
-
-    def on_event(self, event):
-        """
-        Handles the events decoded from the frame.
-
-        Parameters:
-        event (dict): The decoded event.
-        """
-        if event["type"] == "tire_status":
-            self.on_event_tire_state(event)
-        elif event["type"] == "heartbeat":
-            self.HeartbeatEventAck()
-        elif event["type"] == "pairing_ack":
-            logger.info(f"Pairing successful for tire: {event['tire_position']}")
-        elif event["type"] == "time_seed":
-            logger.info(f"Time seed event with seed: {event['seed']}")
-        elif event["type"] == "query_id":
-            logger.info(
-                f"Query ID response for tire: {event['tire_position']} with ID: {event['tire_id']}"
-            )
-        elif event["type"] == "tire_exchange":
-            logger.info(f"Tire exchange event: {event['exchange']}")
-        self.start_data_time = time.time()
 
     def on_event_tire_state(self, event):
         """
@@ -433,63 +167,86 @@ class TPMS:
             5: "Spare",
         }
 
+        # Extract tire data
+        position = tire_positions.get(event["tire_position"], "Unknown")
+        no_signal = event["status"]["no_signal"]
+        pressure = event["pressure"]
+        temperature = event["temperature"]
+
+        # Check if the sensor is out of reception range
+        if no_signal:
+            logger.warning(f"Sensor signal lost for {position} tire.")
+            return
+
         tire_data = {
-            "position": tire_positions.get(event["tire_position"], "Unknown"),
+            "position": position,
             "low_power": event["status"]["low_power"],
             "leakage": event["status"]["leakage"],
-            "no_signal": event["status"]["no_signal"],
-            "pressure": event["pressure"],
-            "temperature": event["temperature"],
+            "no_signal": no_signal,
+            "pressure": pressure,
+            "temperature": temperature,
         }
 
         logger.info(f"Tire State Event: {tire_data}")
 
         self.send_time_seed()
 
-    def initiate_tire_exchange(self, tire1, tire2):
-        """
-        Initiates a tire exchange between two tires.
+    def protocol_frame_filter(self, buffer):
+        frames = []
+        while len(buffer) >= 7:
+            if buffer[0] == 0x55 and buffer[1] == 0xAA:
+                length = buffer[2]
+                if length <= len(buffer):
+                    frames.append(buffer[:length])
+                    buffer = buffer[length:]
+                else:
+                    # Wait for more data
+                    break
+            else:
+                buffer = buffer[1:]
+        return frames, buffer
 
-        Parameters:
-        tire1 (int): The position of the first tire.
-        tire2 (int): The position of the second tire.
-        """
-        # Tire position values:
-        # 0 - Left Front
-        # 1 - Right Front
-        # 16 - Left Rear
-        # 17 - Right Rear
-        # 5 - Spare
-        exchange_map = {
-            (0, 1): bytearray([85, 170, 7, 3, 0, 1, 0]),  # Left Front - Right Front
-            (0, 16): bytearray([85, 170, 7, 3, 0, 16, 0]),  # Left Front - Left Rear
-            (0, 17): bytearray([85, 170, 7, 3, 0, 17, 0]),  # Left Front - Right Rear
-            (1, 16): bytearray([85, 170, 7, 3, 1, 16, 0]),  # Right Front - Left Rear
-            (1, 17): bytearray([85, 170, 7, 3, 1, 17, 0]),  # Right Front - Right Rear
-            (16, 17): bytearray([85, 170, 7, 3, 16, 17, 0]),  # Left Rear - Right Rear
-            (0, 5): bytearray([85, 170, 7, 3, 0, 5, 0]),  # Left Front - Spare
-            (1, 5): bytearray([85, 170, 7, 3, 1, 5, 0]),  # Right Front - Spare
-            (16, 5): bytearray([85, 170, 7, 3, 16, 5, 0]),  # Left Rear - Spare
-            (17, 5): bytearray([85, 170, 7, 3, 17, 5, 0]),  # Right Rear - Spare
+    def send_time_seed(self):
+        # Placeholder for sending time seed if needed
+        logger.info("Time seed sent (placeholder).")
+
+    def initiate_tire_exchange(self, tire1, tire2):
+        tire_positions = {
+            "left_front": 0x00,
+            "right_front": 0x01,
+            "left_back": 0x10,
+            "right_back": 0x11,
+            "spare": 0x05,
         }
-        frame = exchange_map.get((tire1, tire2), None)
-        if frame is not None:
-            logger.info(f"Initiating tire exchange: {tire1} <-> {tire2}")
-            self.send(frame)
-        else:
-            logger.error(f"Invalid tire exchange request: {tire1} <-> {tire2}")
+        if tire1 not in tire_positions or tire2 not in tire_positions:
+            logger.error("Invalid tire positions provided.")
+            return
+
+        frame = bytearray(
+            [0x55, 0xAA, 0x07, 0x03, tire_positions[tire1], tire_positions[tire2], 0x00]
+        )
+        self.ser.write(frame)
+        logger.info(f"Tire exchange initiated between {tire1} and {tire2}.")
 
     def main(self):
-        """
-        Main function to establish the serial connection, read frames, and decode them.
-        """
         self.connect()
-        self.heartbeat()  # Start sending heartbeats
 
+        try:
+            self.ser.write(self.querySensorID)
+        except (serial.SerialException, serial.SerialTimeoutException):
+            logger.error("Serial port unavailable, reconnecting...")
+            self.ser.close()
+            self.connect()
+        except Exception as e:
+            logger.error(f"Unexpected error: {e}")
+            raise
+
+        # Main loop to read and process data from the TPMS device
         while True:
             try:
                 raw_data = self.ser.read(256)  # Read up to 256 bytes at a time
                 if raw_data:
+                    logger.info(f"Raw data received: {raw_data.hex()}")
                     self.incoming_buffer.extend(raw_data)
                     frames, self.incoming_buffer = self.protocol_frame_filter(
                         self.incoming_buffer
@@ -497,7 +254,7 @@ class TPMS:
                     for frame in frames:
                         event = self.decode_frame(frame)
                         if event:
-                            self.on_event(event)
+                            self.on_event_tire_state(event)
             except (serial.SerialException, serial.SerialTimeoutException):
                 logger.error("Serial port unavailable, reconnecting...")
                 self.ser.close()
@@ -517,15 +274,10 @@ if __name__ == "__main__":
         description="Tire Pressure Monitoring System (TPMS) Python Library"
     )
     parser.add_argument(
-        "--port",
-        type=str,
-        help="Serial port address (default: auto-detect based on OS)",
+        "--port", type=str, default=None, help="Serial port (default: auto-detect)"
     )
     parser.add_argument(
-        "--baudrate",
-        type=int,
-        default=19200,
-        help="Baud rate for the serial connection (default: 19200)",
+        "--baudrate", type=int, default=19200, help="Baud rate (default: 19200)"
     )
     parser.add_argument(
         "--temp_unit",
