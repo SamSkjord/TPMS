@@ -12,7 +12,7 @@ Despite looking obvious in thethe dongle casing in no way indicates what hardwar
 
 ## Features
 
-- Supports TY06 and should also work with TY05 hardware versions
+- Supports TY06 and should also work with TY05 hardware versions (No idea for N variants)
 - Serial port can be auto-detected or specified
 - Temperature units: Celsius, Fahrenheit
 - Pressure units: kPa, psi, bar
