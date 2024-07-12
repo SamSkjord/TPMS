@@ -1,19 +1,18 @@
 # TPMS
 
-Tire Pressure Monitoring System Python Library
+Tyre Pressure Monitoring System Python Library
 
 ## Overview
 
-The TPMS (Tire Pressure Monitoring System) Python library is designed to monitor tire pressure and temperature for vehicles equipped with generic (aliexpress) TPMS sensors. This library supports multiple hardware versions and provides options to configure the serial port, baud rate, temperature units, and pressure units.
+The TPMS (Tyre Pressure Monitoring System) Python library is designed to monitor tyre pressure and temperature for vehicles equipped with generic (aliexpress) TPMS sensors. This library has only been tested on the TY06 hardware type but should also work with TY05
 
 ## Features
 
-- Supports TY06 and TY05 hardware versions (current versions appear to be all TY06)
-- Configurable serial port and baud rate
+- Supports TY06 and should also work with TY05 hardware versions
+- Serial port can be auto-detected or specified
 - Temperature units: Celsius, Fahrenheit
 - Pressure units: kPa, psi, bar
-- Continuous monitoring of tire pressure and temperature
-- Logging of tire status events
+- Continuous monitoring of tyre pressure and temperature or oneshot function
 
 ## Installation
 
@@ -22,117 +21,124 @@ Install the TPMS library using pip:
 ```bash
 pip install tpms
 ```
-
 Usage
-You can run the TPMS library with default settings or customize the serial port, baud rate, temperature unit, pressure unit, and hardware version.
 
-Default Usage
-To run the TPMS library with default settings:
+You can run the TPMS library with default settings or customize the serial port, baud rate, temperature unit, pressure unit
+There are two methods of retreiving data, 'oneshot' which returns a dict containing data for each tyre and 'stream_updates' which returns data at a configurable update interval (defaulted to 0.5 seconds)
 
-```bash
-tpms
-```
-Custom Usage
-To specify custom settings:
-
-```bash
-tpms --port COM3 --baudrate 19200 --temp_unit Fahrenheit --pressure_unit psi --hardware_version TY06
-```
 Example Code
-Below is an example of how to use the TPMS library in a Python script:
 
-```python
+oneshot
+```bash
 from tpms import TPMS
+import time
+
+
+def data_received(data):
+    """
+    Callback function to display data received from the TPMS device.
+    This function could also log data to a file or database, send notifications, etc.
+    """
+    print("Data received:")
+    for tyre, info in data.items():
+        print(f"Tyre Position: {tyre}")
+        print(f"  Pressure: {info['Pressure']} psi")  # Assuming psi for example
+        print(
+            f"  Temperature: {info['Temperature']}° Fahrenheit"
+        )  # Assuming Fahrenheit for example
+        status_messages = []
+        if info["Status"]["low_power"]:
+            status_messages.append("low power")
+        if info["Status"]["leakage"]:
+            status_messages.append("leakage")
+        if info["Status"]["no_signal"]:
+            status_messages.append("no signal")
+        print(
+            f"  Status: {', '.join(status_messages) if status_messages else 'Normal'}"
+        )
+        print("")
+
 
 def main():
-    # Initialize TPMS with the desired settings
-    tpms = TPMS(
-        port='/dev/ttyUSB0',       # Replace with your serial port
-        baudrate=19200,
-        temp_unit='Celsius',       # Options: 'Celsius', 'Fahrenheit'
-        pressure_unit='kPa',       # Options: 'kPa', 'psi', 'bar'
-        hardware_version='TY06'    # Options: 'TY06', 'TY05'
+    """
+    Main function to initialize the TPMS system and perform a oneshot data retrieval.
+    """
+    # Initialize the TPMS system with full configuration
+    tpms_system = TPMS(
+        # port="/dev/ttyUSB0",  # Adjust this to the correct serial port
+        baudrate=19200,  # Set baud rate according to your device specifications
+        temp_unit="Fahrenheit",  # Convert temperature readings to Fahrenheit
+        pressure_unit="psi",  # Convert pressure readings to psi
+        debug=True,  # Enable debug mode for detailed logging
     )
 
-    # Connect to the TPMS device
-    tpms.connect()
+    # Perform a single data retrieval using the oneshot method
+    print("Performing a single data retrieval...")
+    single_data = tpms_system.oneshot()
+    if single_data:
+        print("Oneshot Data Retrieval Results:")
+        data_received(single_data)
+    else:
+        print("No data retrieved. Check device connection and settings.")
 
-    # Start monitoring the tire pressure and temperature
-    tpms.heartbeat()  # Start sending heartbeat signals
-
-    # Infinite loop to read data from the TPMS device
-    while True:
-        try:
-            raw_data = tpms.ser.read(256)  # Read up to 256 bytes at a time
-            if raw_data:
-                tpms.incoming_buffer.extend(raw_data)
-                frames, tpms.incoming_buffer = tpms.protocol_frame_filter(tpms.incoming_buffer)
-                for frame in frames:
-                    event = tpms.decode_frame(frame)
-                    if event:
-                        tpms.on_event(event)
-        except (serial.SerialException, serial.SerialTimeoutException):
-            logger.error("Serial port unavailable, reconnecting...")
-            tpms.ser.close()
-            tpms.connect()
-        except KeyboardInterrupt:
-            if tpms.ser is not None:
-                tpms.ser.close()
-                logger.info("Port closed!")
-            logger.info("KeyboardInterrupt detected, exiting...")
-            break
 
 if __name__ == "__main__":
     main()
 ```
 
-Functions
-Initialization
+stream
 ```python
-tpms = TPMS(
-    port='/dev/ttyUSB0',       # Replace with your serial port
-    baudrate=19200,
-    temp_unit='Celsius',       # Options: 'Celsius', 'Fahrenheit'
-    pressure_unit='kPa',       # Options: 'kPa', 'psi', 'bar'
-    hardware_version='TY06'    # Options: 'TY06', 'TY05'
-)
+import time
+from tpms import TPMS
+
+
+def update_dashboard(data):
+    """
+    Update the dashboard or console with the latest tyre data.
+
+    Args:
+    data (list): A list of dictionaries, each containing tyre data.
+    """
+    for tyre_data in data:
+        if tyre_data:
+            print(f"Update for {tyre_data['Position']}:")
+            print(f"  Pressure: {tyre_data['Pressure']} kPa")
+            print(f"  Temperature: {tyre_data['Temperature']} Celsius")
+            print(
+                f"  Status: {', '.join([k for k, v in tyre_data['Status'].items() if v]) or 'Normal'}"
+            )
+            print("")
+
+
+def main():
+    # Initialize the TPMS system with a callback function
+    tpms_system = TPMS(
+        # port="/dev/ttyUSB0",  # Adjust to your serial port
+        baudrate=19200,
+        temp_unit="Celsius",
+        pressure_unit="kPa",
+        callback=update_dashboard,
+        debug=False,
+        update_interval=0.3,
+    )
+
+    # Start the continuous streaming of updates
+    try:
+        tpms_system.stream_updates()
+    except Exception as e:
+        print(f"An error occurred: {e}")
+    finally:
+        print("Monitoring stopped or failed to start.")
+
+
+if __name__ == "__main__":
+    main()
+
 ```
 
-Connect
-Connect to the TPMS device:
-```python
-tpms.connect()
-```
+TODO
 
-Heartbeat
-Send periodic heartbeat signals:
-```python
-tpms.heartbeat()
-```
-
-Pairing Sensors
-Pair sensors to specific tire positions:
-```python
-tpms.pair_back_left()
-tpms.pair_back_right()
-tpms.pair_front_left()
-tpms.pair_front_right()
-tpms.pair_spare()
-```
-
-Stop Pairing
-Stop pairing process:
-
-```python
-tpms.stop_pairing()
-```
-
-Initiate Tire Exchange
-Initiate a tire exchange between two tires:
-
-```python
-tpms.initiate_tire_exchange(tire1, tire2)
-```
+Tyre exchange & sensor pairing functions
 
 License
 This project is licensed under the MIT License - see the LICENSE file for details.
