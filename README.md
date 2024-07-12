@@ -165,7 +165,7 @@ for tyre, info in data.items():
 
 ## TODO
 
-- check/fix sensor status messages
+- check/fix sensor status messages for low battery/out of range/leaking
 - add tyre exchange function
 - add sensor pairing function
 
