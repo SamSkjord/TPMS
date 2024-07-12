@@ -19,12 +19,14 @@ class TPMS:
         pressure_unit="kPa",
         callback=None,
         debug=False,
+        update_interval=0.5,
     ):
         self.baudrate = baudrate
         self.temp_unit = temp_unit
         self.pressure_unit = pressure_unit
         self.debug = debug
         self.callback = callback
+        self.update_interval = update_interval  # Interval between reads in seconds
         self.ser = None
         self.incoming_buffer = bytearray()
 
@@ -80,7 +82,7 @@ class TPMS:
         """
         try:
             self.send_command(self.querySensorID, "Query Sensor ID")
-            time.sleep(2)  # Wait for the device to respond
+            time.sleep(1)  # Wait for the device to respond
             data = self.ser.read(
                 1024
             )  # Adjust buffer size based on expected data volume
@@ -97,6 +99,26 @@ class TPMS:
         except serial.SerialException as e:
             logger.error(f"Serial error during oneshot: {e}")
             self.connect()
+
+    def stream_updates(self):
+        """
+        Continuously read data and process it, sending updates in real-time.
+        """
+        try:
+            while True:
+                data = self.ser.read(256)
+                if data:
+                    logger.debug(f"Received data: {data.hex()}")
+                    self.incoming_buffer.extend(data)
+                    processed_data = self.process_frames()
+                    if self.callback:
+                        self.callback(processed_data)
+                time.sleep(self.update_interval)  # Use the configurable interval
+        except serial.SerialException as e:
+            logger.error(f"Serial error while streaming updates: {e}")
+            self.connect()
+        except KeyboardInterrupt:
+            logger.info("Streaming stopped by user")
 
     def process_frames(self):
         frames = self.extract_frames()
@@ -177,6 +199,7 @@ class TPMS:
 
 
 if __name__ == "__main__":
-    tpms = TPMS(debug=True, temp_unit="Fahrenheit", pressure_unit="psi")
-    single_data = tpms.oneshot()  # Retrieve a single set of data
-    print("Single retrieval data:", single_data)
+    tpms = TPMS(
+        debug=True, temp_unit="Fahrenheit", pressure_unit="psi", update_interval=1.0
+    )
+    tpms.stream_updates()  # Start continuous monitoring with a 1-second update interval
