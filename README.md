@@ -4,7 +4,10 @@ Tyre Pressure Monitoring System Python Library
 
 ## Overview
 
-The TPMS (Tyre Pressure Monitoring System) Python library is designed to monitor tyre pressure and temperature for vehicles equipped with generic (aliexpress) TPMS sensors. This library has only been tested on the TY06 hardware type but should also work with TY05
+The TPMS (Tyre Pressure Monitoring System) Python library is designed to monitor tyre pressure and temperature for vehicles equipped with generic (aliexpress) TPMS sensors. This library has only been tested on the TY06 hardware type but should also work with TY05.
+Despite looking obvious in the TPMS_type image, the dongle casing in no way indicates what hardware is inside.
+![TPMS Dongle Versions.](/TPMS_type.jpg)
+
 
 ## Features
 
