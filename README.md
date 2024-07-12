@@ -110,9 +110,7 @@ def update_dashboard(data):
             print(f"Update for {tyre_data['Position']}:")
             print(f"  Pressure: {tyre_data['Pressure']} kPa")
             print(f"  Temperature: {tyre_data['Temperature']} Celsius")
-            print(
-                f"  Status: {', '.join([k for k, v in tyre_data['Status'].items() if v]) or 'Normal'}"
-            )
+            print(f"  Status: {', '.join([k for k, v in tyre_data['Status'].items() if v]) or 'Normal'}")
             print("")
 
 
