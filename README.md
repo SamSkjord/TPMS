@@ -9,7 +9,7 @@ The TPMS (Tyre Pressure Monitoring System) Python library is designed to monitor
 Despite looking obvious in thethe dongle casing in no way indicates what hardware is inside.
 ![TPMS Dongle Versions.](/TPMS_type.jpg)
 
-The temperature values appear to drift upwards overtime, removing and reinserting the battery seems to fix it but I wouldn't rely on it for data 
+The temperature values appear to drift upwards over time, removing and reinserting the battery seems to fix it but I wouldn't rely on it for data 
 
 
 ## Features
