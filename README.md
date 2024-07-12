@@ -140,5 +140,7 @@ TODO
 
 Tyre exchange & sensor pairing functions
 
+Issues or pull requests gladly recieved
+
 License
 This project is licensed under the MIT License - see the LICENSE file for details.
