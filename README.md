@@ -165,7 +165,10 @@ for tyre, info in data.items():
 
 ## TODO
 
-Tyre exchange & sensor pairing functions
+- check/fix sensor status messages
+- add tyre exchange function
+- add sensor pairing function
+
 
 Issues or pull requests gladly recieved
 
