@@ -26,9 +26,9 @@ pip install tpms
 You can run the TPMS library with default settings or customize the serial port, baud rate, temperature unit, pressure unit
 There are two methods of retreiving data, 'oneshot' which returns a dict containing data for each tyre and 'stream_updates' which returns data at a configurable update interval (defaulted to 0.5 seconds)
 
-Example Code
+## Example Code
 
-# oneshot
+### oneshot
 ```bash
 from tpms import TPMS
 import time
@@ -86,7 +86,7 @@ if __name__ == "__main__":
     main()
 ```
 
-# stream
+### stream
 ```python
 import time
 from tpms import TPMS
