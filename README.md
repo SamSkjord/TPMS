@@ -1,13 +1,14 @@
 # TPMS
 
 Tyre Pressure Monitoring System Python Library
+[TL;DR](https://github.com/SamSkjord/TPMS/tree/main?tab=readme-ov-file#tldr)
 
 ## Overview
 
 The TPMS (Tyre Pressure Monitoring System) Python library is designed to monitor tyre pressure and temperature for vehicles equipped with generic (aliexpress) TPMS sensors. This library has only been tested on the TY06 hardware type but should also work with TY05.
 
 Despite looking obvious in thethe dongle casing in no way indicates what hardware is inside.
-![TPMS Dongle Versions.](/TPMS_type.jpg)
+![TPMS Dongle Versions.](https://github.com/SamSkjord/TPMS/TPMS_type.jpg)
 
 The temperature values appear to drift upwards over time, removing and reinserting the battery seems to fix it but I wouldn't rely on it for data 
 
@@ -28,8 +29,6 @@ Install the TPMS library using pip:
 pip install tpms
 ```
 ## Usage
-
-[TL;DR](https://github.com/SamSkjord/TPMS/tree/main?tab=readme-ov-file#tldr)
 
 You can run the TPMS library with default settings or customize the serial port, baud rate, temperature unit, pressure unit
 There are two methods of retreiving data, 'oneshot' which returns a dict containing data for each tyre and 'stream_updates' which returns data at a configurable update interval (defaulted to 0.5 seconds)
