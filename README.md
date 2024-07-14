@@ -1,7 +1,7 @@
 # TPMS
 
 Tyre Pressure Monitoring System Python Library
-[TL;DR](https://github.com/SamSkjord/TPMS/tree/main?tab=readme-ov-file#tldr)
+[TL;DR](https://github.com/SamSkjord/TPMS/#tldr)
 
 ## Overview
 
