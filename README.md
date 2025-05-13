@@ -1,22 +1,14 @@
 # TPMS
 
-Tyre Pressure Monitoring System Python Library
+Tire Pressure Monitoring System Python Library
 
 ## Overview
 
-The TPMS (Tyre Pressure Monitoring System) Python library is designed to monitor tyre pressure and temperature for vehicles equipped with generic (aliexpress) TPMS sensors. This library has only been tested on the TY06 hardware type but should also work with TY05.
+The TPMS (Tire Pressure Monitoring System) Python library is designed to monitor tire pressure and temperature for vehicles equipped with generic (AliExpress) TPMS sensors. This library has been tested on the TY06 hardware type but should also work with TY05.
 
-Despite looking obvious in thethe dongle casing in no way indicates what hardware is inside.
-![TPMS Dongle Versions.](/TPMS_type.jpg)
-
-
-## Features
-
-- Supports TY06 and should also work with TY05 hardware versions (No idea for N variants)
-- Serial port can be auto-detected or specified
-- Temperature units: Celsius, Fahrenheit
-- Pressure units: kPa, psi, bar
-- Continuous monitoring of tyre pressure and temperature or oneshot function
+Pairing 'should' work but seems a bit iffy currently.
+ 
+V2 of this library has breaking changes and is not directly compatible with V1.
 
 ## Installation
 
@@ -25,151 +17,230 @@ Install the TPMS library using pip:
 ```bash
 pip install tpms
 ```
+
 ## Usage
 
-[TL;DR](https://github.com/SamSkjord/TPMS/tree/main?tab=readme-ov-file#tldr)
+### Basic Usage
 
-You can run the TPMS library with default settings or customize the serial port, baud rate, temperature unit, pressure unit
-There are two methods of retreiving data, 'oneshot' which returns a dict containing data for each tyre and 'stream_updates' which returns data at a configurable update interval (defaulted to 0.5 seconds)
-
-## Example Code
-
-### oneshot
-```bash
-from tpms import TPMS
-import time
-
-
-def data_received(data):
-    """
-    Callback function to display data received from the TPMS device.
-    This function could also log data to a file or database, send notifications, etc.
-    """
-    print("Data received:")
-    for tyre, info in data.items():
-        print(f"Tyre Position: {tyre}")
-        print(f"  Pressure: {info['Pressure']} psi")  # Assuming psi for example
-        print(
-            f"  Temperature: {info['Temperature']}° Fahrenheit"
-        )  # Assuming Fahrenheit for example
-        status_messages = []
-        if info["Status"]["low_power"]:
-            status_messages.append("low power")
-        if info["Status"]["leakage"]:
-            status_messages.append("leakage")
-        if info["Status"]["no_signal"]:
-            status_messages.append("no signal")
-        print(
-            f"  Status: {', '.join(status_messages) if status_messages else 'Normal'}"
-        )
-        print("")
-
-
-def main():
-    """
-    Main function to initialize the TPMS system and perform a oneshot data retrieval.
-    """
-    # Initialize the TPMS system with full configuration
-    tpms_system = TPMS(
-        # port="/dev/ttyUSB0",  # Adjust this to the correct serial port
-        baudrate=19200,  # Set baud rate according to your device specifications
-        temp_unit="Fahrenheit",  # Convert temperature readings to Fahrenheit
-        pressure_unit="psi",  # Convert pressure readings to psi
-        debug=True,  # Enable debug mode for detailed logging
-    )
-
-    # Perform a single data retrieval using the oneshot method
-    print("Performing a single data retrieval...")
-    single_data = tpms_system.oneshot()
-    if single_data:
-        print("Oneshot Data Retrieval Results:")
-        data_received(single_data)
-    else:
-        print("No data retrieved. Check device connection and settings.")
-
-
-if __name__ == "__main__":
-    main()
-```
-
-### stream
 ```python
-import time
-from tpms import TPMS
+from tpms_lib import TPMSDevice, TirePosition
 
+# Create TPMS device
+tpms = TPMSDevice()
 
-def update_dashboard(data):
-    """
-    Update the dashboard or console with the latest tyre data.
-
-    Args:
-    data (list): A list of dictionaries, each containing tyre data.
-    """
-    for tyre_data in data:
-        if tyre_data:
-            print(f"Update for {tyre_data['Position']}:")
-            print(f"  Pressure: {tyre_data['Pressure']} kPa")
-            print(f"  Temperature: {tyre_data['Temperature']} Celsius")
-            print(
-                f"  Status: {', '.join([k for k, v in tyre_data['Status'].items() if v]) or 'Normal'}"
-            )
-            print("")
-
-
-def main():
-    # Initialize the TPMS system with a callback function
-    tpms_system = TPMS(
-        # port="/dev/ttyUSB0",  # Adjust to your serial port
-        baudrate=19200,
-        temp_unit="Celsius",
-        pressure_unit="kPa",
-        callback=update_dashboard,
-        debug=False,
-        update_interval=0.3,
-    )
-
-    # Start the continuous streaming of updates
-    try:
-        tpms_system.stream_updates()
-    except Exception as e:
-        print(f"An error occurred: {e}")
-    finally:
-        print("Monitoring stopped or failed to start.")
-
-
-if __name__ == "__main__":
-    main()
-
+# Find available devices
+available_ports = tpms.find_device()
+if available_ports:
+    # Connect to the first available port
+    tpms.connect(available_ports[0])
+    
+    # Query sensor IDs
+    tpms.query_sensor_ids()
+    
+    # Get tire states
+    tire_states = tpms.get_all_tire_states()
+    for position, state in tire_states.items():
+        print(f"{position.name}: {state}")
+    
+    # Disconnect when done
+    tpms.disconnect()
 ```
 
+### Temperature and Pressure Conversion
 
-# TLDR
+```python
+from tpms_lib import TPMSDevice, TirePosition
+
+tpms = TPMSDevice()
+tpms.connect()
+tire_states = tpms.get_all_tire_states()
+
+for position, state in tire_states.items():
+    pressure_psi = state.air_pressure * 0.145038
+    temp_f = (state.temperature * 9/5) + 32
+
+    print(f"{position.name}:")
+    print(f"  Pressure: {pressure_psi:.1f} PSI")
+    print(f"  Temperature: {temp_f:.1f}°F")
+
+    status = []
+    if state.no_signal:
+        status.append("NO SIGNAL")
+    if state.is_leaking:
+        status.append("LEAKAGE")
+    if state.is_low_power:
+        status.append("LOW BATTERY")
+    
+    print(f"  Status: {', '.join(status) if status else 'Normal'}")
+    print()
+
+tpms.disconnect()
+```
+
+### Continuous Monitoring with Callback
+
+```python
+from tpms_lib import TPMSDevice, TirePosition, TireState
+import time
+
+def on_tire_state_update(position, state):
+    pressure_psi = state.air_pressure * 0.145038
+    temp_f = (state.temperature * 9/5) + 32
+
+    print(f"Update for {position.name}:")
+    print(f"  Pressure: {pressure_psi:.1f} PSI")
+    print(f"  Temperature: {temp_f:.1f}°F")
+
+    status = []
+    if state.no_signal:
+        status.append("NO SIGNAL")
+    if state.is_leaking:
+        status.append("LEAKAGE")
+    if state.is_low_power:
+        status.append("LOW BATTERY")
+    
+    print(f"  Status: {', '.join(status) if status else 'Normal'}")
+    print()
+
+tpms = TPMSDevice()
+tpms.register_tire_state_callback(on_tire_state_update)
+tpms.connect()
+
+try:
+    print("Monitoring for 60 seconds...")
+    time.sleep(60)
+except KeyboardInterrupt:
+    print("Monitoring stopped by user")
+finally:
+    tpms.disconnect()
+```
+
+## TL;DR
+
 ```bash
-pip install TPMS
+pip install tpms
 ```
 
 ```python
-from tpms import TPMS
+from tpms_lib import TPMSDevice
+
+tpms = TPMSDevice()
+tpms.connect()
+tire_states = tpms.get_all_tire_states()
+
+for position, state in tire_states.items():
+    psi = state.air_pressure * 0.145038
+    temp_f = (state.temperature * 9/5) + 32
+    print(f"{position.name}: {psi:.1f} PSI, {temp_f:.1f}°F")
+
+    if state.no_signal or state.is_leaking or state.is_low_power:
+        print("  ALERT: Check tire!")
+
+tpms.disconnect()
+```
+
+### Pairing Sensors (Semi-functional)
+
+```python
+from tpms_lib import TPMSDevice, TirePosition
 import time
 
-tpms_system = TPMS(
-    # port="/dev/ttyUSB0",  # Adjust this to the correct serial port (optional)
-    temp_unit="Fahrenheit",  # Convert temperature readings to Fahrenheit
-    pressure_unit="psi",  # Convert pressure readings to psi
-    debug=False,  # Enable debug mode for detailed logging
-)
+tpms = TPMSDevice()
+tpms.connect()
 
-data = tpms_system.oneshot()
+def on_pairing_complete(position, tire_id):
+    print(f"Successfully paired sensor with ID {tire_id} to {position.name}")
 
-for tyre, info in data.items():
-    print(tyre, info)
+tpms.register_pairing_callback(on_pairing_complete)
+
+print("Starting pairing mode for front left tire...")
+print("Please activate the sensor (add/release air or move the tire)...")
+tpms.pair_sensor(TirePosition.FRONT_LEFT)
+
+time.sleep(30)
+
+tpms.stop_pairing()
+print("Pairing mode stopped")
+tpms.disconnect()
 ```
+
+### Exchanging Tire Positions
+
+```python
+from tpms_lib import TPMSDevice, TirePosition
+
+tpms = TPMSDevice()
+tpms.connect()
+
+def on_exchange_complete(position1, position2):
+    print(f"Successfully exchanged {position1.name} with {position2.name}")
+
+tpms.register_exchange_callback(on_exchange_complete)
+
+print("Exchanging front left and front right tires...")
+tpms.exchange_tires(TirePosition.FRONT_LEFT, TirePosition.FRONT_RIGHT)
+tpms.disconnect()
+```
+
+### Resetting the Device
+
+```python
+from tpms_lib import TPMSDevice
+
+tpms = TPMSDevice()
+tpms.connect()
+tpms.reset_device()
+print("Device has been reset. All paired sensors have been cleared.")
+tpms.disconnect()
+```
+
+## Example Application
+
+An example CLI application is included. After installation, run:
+
+```bash
+tpms-monitor
+```
+
+The script provides a menu-driven interface for:
+- Showing current tire states
+- Querying sensor IDs
+- Pairing sensors
+- Exchanging tire positions
+- Resetting the device
+- Toggling debug logging
+
+## Debugging
+
+To enable debug logging:
+
+```python
+import logging
+logging.getLogger("tpms_lib").setLevel(logging.DEBUG)
+```
+
+## Protocol Details
+
+The library implements the TPMS protocol based on reverse engineering of the Android app. The protocol uses a simple frame structure:
+
+```
+[0x55, 0xAA, length, command, data..., checksum]
+```
+
+Where:
+- 0x55, 0xAA: Header bytes
+- length: Length of the frame (command + data + checksum)
+- command: Command code
+- data: Command-specific data
+- checksum: XOR of all previous bytes
 
 ## TODO
 
-Tyre exchange & sensor pairing functions
-
-Issues or pull requests gladly recieved
+- Complete pairing functions
+- Add helper functions for unit conversion
+- Improve error handling and recovery
+- Add more documentation
 
 ## License
+
 This project is licensed under the MIT License - see the LICENSE file for details.
