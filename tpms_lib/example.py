@@ -9,7 +9,7 @@ This example demonstrates how to use the TPMS library to interface with TPMS sen
 
 import time
 import logging
-from tpms_lib import TPMSDevice, TirePosition, TireState
+from tpms_lib import TPMSDevice, TyrePosition, TyreState
 
 # Configure logging
 logging.basicConfig(
@@ -17,8 +17,8 @@ logging.basicConfig(
 )
 logger = logging.getLogger("tpms_example")
 
-# Enable debug logging for the TPMS library
-logging.getLogger("tpms_python.tpms_lib").setLevel(logging.DEBUG)
+# TPMS library logger (use menu option 6 to enable debug logging)
+tpms_logger = logging.getLogger("tpms_python.tpms_lib")
 
 
 def main():
@@ -27,7 +27,7 @@ def main():
     tpms = TPMSDevice()
 
     # Register callbacks
-    tpms.register_tire_state_callback(on_tire_state_update)
+    tpms.register_tyre_state_callback(on_tyre_state_update)
     tpms.register_pairing_callback(on_pairing_complete)
     tpms.register_exchange_callback(on_exchange_complete)
 
@@ -36,8 +36,8 @@ def main():
     tpms.set_low_pressure_threshold(180)  # 180 kPa (26 PSI)
     tpms.set_high_temp_threshold(75)  # 75°C (167°F)
 
-    # Enable spare tire monitoring
-    tpms.set_spare_tire_enabled(True)
+    # Enable spare tyre monitoring
+    tpms.set_spare_tyre_enabled(True)
 
     # Find available devices
     available_ports = tpms.find_device()
@@ -80,16 +80,16 @@ def main():
             tpms.query_sensor_ids()
 
             # Wait for data and IDs to be received
-            logger.info("Waiting for tire data and IDs...")
+            logger.info("Waiting for tyre data and IDs...")
             time.sleep(2)  # Give some time for IDs to be received
 
             # Example menu loop
             while True:
                 print("\nTPMS Example Menu:")
-                print("1. Show current tire states")
+                print("1. Show current tyre states")
                 print("2. Query sensor IDs")
-                print("3. Start pairing mode for a tire")
-                print("4. Exchange tire positions")
+                print("3. Start pairing mode for a tyre")
+                print("4. Exchange tyre positions")
                 print("5. Reset device")
                 print("6. Toggle debug logging")
                 print("7. Exit")
@@ -97,13 +97,13 @@ def main():
                 choice = input("Enter your choice (1-7): ")
 
                 if choice == "1":
-                    show_tire_states(tpms)
+                    show_tyre_states(tpms)
                 elif choice == "2":
                     query_sensor_ids(tpms)
                 elif choice == "3":
                     start_pairing(tpms)
                 elif choice == "4":
-                    exchange_tires(tpms)
+                    exchange_tyres(tpms)
                 elif choice == "5":
                     logger.info("Resetting device...")
                     tpms.reset_device()
@@ -127,9 +127,9 @@ def main():
         logger.error(f"Failed to connect to {selected_port}")
 
 
-def on_tire_state_update(position: TirePosition, state: TireState):
-    """Callback for tire state updates"""
-    logger.info(f"Tire {position.name} updated: {state}")
+def on_tyre_state_update(position: TyrePosition, state: TyreState):
+    """Callback for tyre state updates."""
+    logger.info(f"Tyre {position.name} updated: {state}")
 
     # Check for alerts
     alerts = []
@@ -144,19 +144,19 @@ def on_tire_state_update(position: TirePosition, state: TireState):
         logger.warning(f"ALERTS for {position.name}: {', '.join(alerts)}")
 
 
-def on_pairing_complete(position: TirePosition, tire_id: str):
+def on_pairing_complete(position: TyrePosition, tyre_id: str):
     """Callback for pairing completion"""
-    logger.info(f"Pairing complete for {position.name}: ID {tire_id}")
+    logger.info(f"Pairing complete for {position.name}: ID {tyre_id}")
 
 
-def on_exchange_complete(position1: TirePosition, position2: TirePosition):
-    """Callback for tire exchange completion"""
-    logger.info(f"Tire exchange complete: {position1.name} <-> {position2.name}")
+def on_exchange_complete(position1: TyrePosition, position2: TyrePosition):
+    """Callback for tyre exchange completion."""
+    logger.info(f"Tyre exchange complete: {position1.name} <-> {position2.name}")
 
 
 def toggle_debug_logging(tpms: TPMSDevice):
     """Toggle debug logging for the TPMS library"""
-    tpms_logger = logging.getLogger("tpms_python.tpms_lib")
+    global tpms_logger
     if tpms_logger.level == logging.DEBUG:
         tpms_logger.setLevel(logging.INFO)
         print("Debug logging disabled")
@@ -164,9 +164,9 @@ def toggle_debug_logging(tpms: TPMSDevice):
         tpms_logger.setLevel(logging.DEBUG)
         print("Debug logging enabled - you will see detailed communication logs")
 
-    # Also log the current state of all tire positions
-    print("\nCurrent Tire States:")
-    for position, state in tpms.get_all_tire_states().items():
+    # Also log the current state of all tyre positions
+    print("\nCurrent Tyre States:")
+    for position, state in tpms.get_all_tyre_states().items():
         print(f"{position.name}: {state}")
 
 
@@ -187,30 +187,30 @@ def query_sensor_ids(tpms: TPMSDevice):
     print(f"{'Position':<15} {'ID':<20}")
     print("-" * 50)
 
-    for position, state in tpms.get_all_tire_states().items():
-        # Skip spare tire if disabled
-        if position == TirePosition.SPARE_TIRE and not tpms.spare_tire_enabled:
+    for position, state in tpms.get_all_tyre_states().items():
+        # Skip spare tyre if disabled
+        if position == TyrePosition.SPARE_TYRE and not tpms.spare_tyre_enabled:
             continue
 
-        print(f"{position.name:<15} {state.tire_id:<20}")
+        print(f"{position.name:<15} {state.tyre_id:<20}")
 
     print("-" * 50)
     print("Note: Empty IDs indicate sensors that haven't been paired or detected.")
     print("Use the pairing function to pair sensors with specific positions.")
 
 
-def show_tire_states(tpms: TPMSDevice):
-    """Display current tire states"""
-    print("\nCurrent Tire States:")
+def show_tyre_states(tpms: TPMSDevice):
+    """Display current tyre states."""
+    print("\nCurrent Tyre States:")
     print("-" * 80)
     print(
         f"{'Position':<15} {'ID':<10} {'Pressure (kPa)':<15} {'Temp (°C)':<10} {'Status':<20}"
     )
     print("-" * 80)
 
-    for position, state in tpms.get_all_tire_states().items():
-        # Skip spare tire if disabled
-        if position == TirePosition.SPARE_TIRE and not tpms.spare_tire_enabled:
+    for position, state in tpms.get_all_tyre_states().items():
+        # Skip spare tyre if disabled
+        if position == TyrePosition.SPARE_TYRE and not tpms.spare_tyre_enabled:
             continue
 
         # Determine status
@@ -231,7 +231,7 @@ def show_tire_states(tpms: TPMSDevice):
             status.append("OK")
 
         print(
-            f"{position.name:<15} {state.tire_id:<10} {state.air_pressure:<15} "
+            f"{position.name:<15} {state.tyre_id:<10} {state.air_pressure:<15} "
             f"{state.temperature:<10} {', '.join(status):<20}"
         )
 
@@ -239,23 +239,23 @@ def show_tire_states(tpms: TPMSDevice):
 
 
 def start_pairing(tpms: TPMSDevice):
-    """Start pairing mode for a tire"""
-    print("\nSelect tire position to pair:")
+    """Start pairing mode for a tyre."""
+    print("\nSelect tyre position to pair:")
     print("1. Front Left")
     print("2. Front Right")
     print("3. Rear Left")
     print("4. Rear Right")
-    print("5. Spare Tire")
+    print("5. Spare Tyre")
     print("6. Cancel")
 
     choice = input("Enter your choice (1-6): ")
 
     position_map = {
-        "1": TirePosition.FRONT_LEFT,
-        "2": TirePosition.FRONT_RIGHT,
-        "3": TirePosition.REAR_LEFT,
-        "4": TirePosition.REAR_RIGHT,
-        "5": TirePosition.SPARE_TIRE,
+        "1": TyrePosition.FRONT_LEFT,
+        "2": TyrePosition.FRONT_RIGHT,
+        "3": TyrePosition.REAR_LEFT,
+        "4": TyrePosition.REAR_RIGHT,
+        "5": TyrePosition.SPARE_TYRE,
     }
 
     if choice in position_map:
@@ -279,22 +279,22 @@ def start_pairing(tpms: TPMSDevice):
         print("Waiting for responses (5 seconds)...")
         time.sleep(5)
 
-        # Show the current tire states
-        show_tire_states(tpms)
+        # Show the current tyre states
+        show_tyre_states(tpms)
     elif choice == "6":
         logger.info("Pairing cancelled")
     else:
         print("Invalid choice")
 
 
-def exchange_tires(tpms: TPMSDevice):
-    """Exchange tire positions"""
-    print("\nSelect first tire position:")
+def exchange_tyres(tpms: TPMSDevice):
+    """Exchange tyre positions."""
+    print("\nSelect first tyre position:")
     print("1. Front Left")
     print("2. Front Right")
     print("3. Rear Left")
     print("4. Rear Right")
-    print("5. Spare Tire")
+    print("5. Spare Tyre")
     print("6. Cancel")
 
     choice1 = input("Enter your choice (1-6): ")
@@ -303,12 +303,12 @@ def exchange_tires(tpms: TPMSDevice):
         logger.info("Exchange cancelled")
         return
 
-    print("\nSelect second tire position:")
+    print("\nSelect second tyre position:")
     print("1. Front Left")
     print("2. Front Right")
     print("3. Rear Left")
     print("4. Rear Right")
-    print("5. Spare Tire")
+    print("5. Spare Tyre")
     print("6. Cancel")
 
     choice2 = input("Enter your choice (1-6): ")
@@ -318,11 +318,11 @@ def exchange_tires(tpms: TPMSDevice):
         return
 
     position_map = {
-        "1": TirePosition.FRONT_LEFT,
-        "2": TirePosition.FRONT_RIGHT,
-        "3": TirePosition.REAR_LEFT,
-        "4": TirePosition.REAR_RIGHT,
-        "5": TirePosition.SPARE_TIRE,
+        "1": TyrePosition.FRONT_LEFT,
+        "2": TyrePosition.FRONT_RIGHT,
+        "3": TyrePosition.REAR_LEFT,
+        "4": TyrePosition.REAR_RIGHT,
+        "5": TyrePosition.SPARE_TYRE,
     }
 
     if choice1 in position_map and choice2 in position_map:
@@ -330,11 +330,11 @@ def exchange_tires(tpms: TPMSDevice):
         position2 = position_map[choice2]
 
         if position1 == position2:
-            print("Cannot exchange a tire with itself")
+            print("Cannot exchange a tyre with itself")
             return
 
         logger.info(f"Exchanging {position1.name} with {position2.name}...")
-        tpms.exchange_tires(position1, position2)
+        tpms.exchange_tyres(position1, position2)
     else:
         print("Invalid choice")
 

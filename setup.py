@@ -13,8 +13,8 @@ with open("requirements.txt", encoding="utf-8") as f:
 
 setup(
     name="tpms",
-    version="2.0.1",
-    description="A Python library for interfacing with TPMS (Tire Pressure Monitoring System) devices",
+    version="2.1.0",
+    description="A Python library for interfacing with TPMS (Tyre Pressure Monitoring System) devices",
     long_description=long_description,
     long_description_content_type="text/markdown",
     author="Sam Conway",
@@ -37,7 +37,7 @@ setup(
         "Topic :: System :: Hardware :: Hardware Drivers",
     ],
     python_requires=">=3.6",
-    keywords="tpms, tire pressure, monitoring, sensors, automotive",
+    keywords="tpms, tyre pressure, monitoring, sensors, automotive",
     project_urls={
         "Bug Reports": "https://github.com/samskjord/tpms/issues",
         "Source": "https://github.com/samskjord/tpms",

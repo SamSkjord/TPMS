@@ -2,17 +2,17 @@
 # -*- coding: utf-8 -*-
 
 """
-TPMS Library - Python implementation of TPMS (Tire Pressure Monitoring System)
+TPMS Library - Python implementation of TPMS (Tyre Pressure Monitoring System)
 
 This library provides functionality to interface with TPMS sensors via USB,
-allowing for reading tire data, pairing sensors, and managing tire positions.
+allowing for reading tyre data, pairing sensors, and managing tyre positions.
 """
 
 import logging
 import time
 import threading
-from enum import Enum, IntEnum
-from typing import Dict, List, Optional, Tuple, Union, Callable
+from enum import IntEnum
+from typing import Dict, List, Optional, Tuple, Callable
 import serial
 import serial.tools.list_ports
 
@@ -28,32 +28,51 @@ DEFAULT_BAUDRATE = 19200  # Correct baudrate for this TPMS device
 # Alternative baudrates to try if the default doesn't work
 ALTERNATIVE_BAUDRATES = [9600, 115200, 38400, 57600]
 
+# Position code mappings used in protocol
+# Pairing/tyre state use: FL=0, FR=1, RL=16, RR=17, Spare=5
+# Query ID responses use: FL=1, FR=2, RL=3, RR=4, Spare=5
+POSITION_CODE_TO_TYRE = {
+    0: "FRONT_LEFT",
+    1: "FRONT_RIGHT",
+    16: "REAR_LEFT",
+    17: "REAR_RIGHT",
+    5: "SPARE_TYRE",
+}
 
-class TirePosition(IntEnum):
-    """Enum representing tire positions"""
+QUERY_ID_CODE_TO_TYRE = {
+    1: "FRONT_LEFT",
+    2: "FRONT_RIGHT",
+    3: "REAR_LEFT",
+    4: "REAR_RIGHT",
+    5: "SPARE_TYRE",
+}
+
+
+class TyrePosition(IntEnum):
+    """Enum representing tyre positions."""
 
     REAR_LEFT = 0
     FRONT_LEFT = 1
     FRONT_RIGHT = 2
     REAR_RIGHT = 3
-    SPARE_TIRE = 5
+    SPARE_TYRE = 5
 
 
 class Command(IntEnum):
     """Command codes used in the TPMS protocol"""
 
     HEARTBEAT = 6
-    EXCHANGE_TIRES = 7
-    TIRE_STATE = 8
+    EXCHANGE_TYRES = 7
+    TYRE_STATE = 8
     QUERY_ID = 9
     RESET = 10
 
 
-class TireState:
-    """Class representing the state of a tire"""
+class TyreState:
+    """Class representing the state of a tyre."""
 
     def __init__(self):
-        self.tire_id = ""
+        self.tyre_id = ""
         self.air_pressure = 0  # in kPa
         self.temperature = 0  # in Celsius
         self.is_leaking = False
@@ -64,37 +83,59 @@ class TireState:
 
     def __str__(self):
         return (
-            f"TireState(ID: {self.tire_id}, Pressure: {self.air_pressure} kPa, "
+            f"TyreState(ID: {self.tyre_id}, Pressure: {self.air_pressure} kPa, "
             f"Temp: {self.temperature}°C, Leaking: {self.is_leaking}, "
             f"Low Power: {self.is_low_power}, No Signal: {self.no_signal})"
         )
 
 
 class TPMSProtocol:
-    """Handles the low-level protocol for TPMS communication"""
+    """Handles the low-level protocol for TPMS communication
 
-    # Frame structure: [0x55, 0xAA, length, command, data..., checksum]
+    Frame structure: [0x55, 0xAA, length, command, data..., checksum]
+
+    The length byte represents the TOTAL frame size (including headers and checksum).
+    The length also serves as a message type discriminator:
+      - Length 6: Command messages (pairing, heartbeat, stop, query, reset)
+      - Length 7: Exchange tyre positions
+      - Length 8: Tyre state updates
+      - Length 9: Query ID responses
+
+    Checksum is XOR of bytes[0] through bytes[length-2].
+    """
+
     HEADER_1 = 0x55
     HEADER_2 = 0xAA
 
     def __init__(self):
         self.buffer = bytearray()
 
-    def create_frame(self, command: int, data: List[int]) -> bytes:
-        """Create a frame to send to the TPMS device"""
-        # Frame length is command byte + data bytes + checksum byte
-        length = 1 + len(data) + 1
+    @staticmethod
+    def calc_checksum(frame: bytearray) -> int:
+        """Calculate XOR checksum for a frame.
 
-        # Create frame without checksum
-        frame = bytearray([self.HEADER_1, self.HEADER_2, length, command] + data)
-
-        # Calculate checksum (XOR of all bytes starting from HEADER_1)
+        From PackBufferFrameEn3.calcCC:
+        XOR all bytes from index 0 to (length - 2), where length = frame[2].
+        """
+        length = frame[2]
         checksum = frame[0]
-        for i in range(1, len(frame)):
+        for i in range(1, length - 1):
             checksum ^= frame[i]
+        return checksum & 0xFF
 
-        # Add checksum to frame
-        frame.append(checksum)
+    def create_frame(self, command: int, data: List[int]) -> bytes:
+        """Create a frame to send to the TPMS device.
+
+        The length byte is the total frame size: header(2) + length(1) + cmd(1) + data + checksum(1)
+        """
+        # Total frame length = 2 (header) + 1 (length) + 1 (command) + len(data) + 1 (checksum)
+        length = 5 + len(data)
+
+        # Create frame with placeholder for checksum
+        frame = bytearray([self.HEADER_1, self.HEADER_2, length, command] + data + [0x00])
+
+        # Calculate and set checksum
+        frame[-1] = self.calc_checksum(frame)
 
         return bytes(frame)
 
@@ -159,25 +200,28 @@ class TPMSDevice:
         self.running = False
         self.read_thread = None
 
-        # Tire states
-        self.tire_states = {
-            TirePosition.FRONT_LEFT: TireState(),
-            TirePosition.FRONT_RIGHT: TireState(),
-            TirePosition.REAR_LEFT: TireState(),
-            TirePosition.REAR_RIGHT: TireState(),
-            TirePosition.SPARE_TIRE: TireState(),
+        # Tyre states
+        self.tyre_states = {
+            TyrePosition.FRONT_LEFT: TyreState(),
+            TyrePosition.FRONT_RIGHT: TyreState(),
+            TyrePosition.REAR_LEFT: TyreState(),
+            TyrePosition.REAR_RIGHT: TyreState(),
+            TyrePosition.SPARE_TYRE: TyreState(),
         }
 
         # Callbacks
-        self.on_tire_state_update = None
+        self.on_tyre_state_update = None
         self.on_pairing_complete = None
         self.on_exchange_complete = None
+
+        # Thread lock for tyre_states access
+        self._lock = threading.Lock()
 
         # Settings
         self.high_pressure_threshold = 310  # kPa (default)
         self.low_pressure_threshold = 180  # kPa (default)
         self.high_temp_threshold = 75  # Celsius (default)
-        self.spare_tire_enabled = False
+        self.spare_tyre_enabled = False
 
     def find_device(self) -> List[str]:
         """Find available TPMS devices"""
@@ -312,8 +356,17 @@ class TPMSDevice:
             self.serial.close()
             logger.info(f"Disconnected from {self.port}")
 
+    def _invoke_callback(self, callback, *args):
+        """Safely invoke a callback, catching any exceptions to prevent crashing the read thread."""
+        if callback is None:
+            return
+        try:
+            callback(*args)
+        except Exception as e:
+            logger.error(f"Exception in callback: {e}")
+
     def _read_loop(self):
-        """Background thread for reading data from the device"""
+        """Background thread for reading data from the device."""
         while self.running and self.serial and self.serial.is_open:
             try:
                 # Read data
@@ -346,18 +399,63 @@ class TPMSDevice:
             time.sleep(0.01)
 
     def _handle_command(self, command: int, data: List[int]):
-        """Handle received commands"""
-        if command == Command.TIRE_STATE:
-            self._handle_tire_state(data)
+        """Handle received commands.
+
+        Note: Due to protocol structure, 'command' here is frame[3], which is:
+        - For tyre state (length=8): position code (0, 1, 16, 17, 5)
+        - For pairing success (length=6): sub-command 0x18 (24)
+        - For query ID (length=9): position code (1-5)
+        - For exchange (length=7): sub-command 0x30 (48)
+        """
+        # Pairing success: frame[3] = 0x18 (24)
+        if command == 24:  # 0x18 - Pairing success
+            logger.info(f"Pairing success response: data={[f'{b:02X}' for b in data]}")
+            # data[0] is the position code
+            if len(data) >= 1:
+                self._handle_pairing_complete([24] + data)
+            return
+
+        # Tyre state (length=8): frame[3] = position code, data = [pressure, temp, flags]
+        # Query ID (length=9): frame[3] = position code (1-5), data = [id0, id1, id2, id3]
+        #
+        # Disambiguation: Query ID uses position codes 1-5, tyre state uses 0,1,16,17,5
+        # Position codes 2,3,4 are ONLY used by Query ID responses
+        # Position code 0 is ONLY used by tyre state (Front Left)
+        # Position codes 16,17 are ONLY used by tyre state (Rear Left/Right)
+        if command in [2, 3, 4]:  # Query ID only position codes
+            if len(data) >= 4:
+                self._handle_query_id([command] + data)
+            return
+
+        if command in [0, 16, 17]:  # Tyre state only position codes
+            if len(data) >= 2:
+                self._handle_direct_tyre_update(command, data)
+            return
+
+        # Ambiguous: command 1 (FL tyre state OR FR query ID) and 5 (spare tyre OR spare query ID)
+        # Use data length to disambiguate: query ID has exactly 4 ID bytes
+        if command in [1, 5]:
+            if len(data) == 4:
+                # Likely query ID response (4 bytes of ID)
+                self._handle_query_id([command] + data)
+            elif len(data) >= 2:
+                # Likely tyre state (pressure, temp, optional flags)
+                self._handle_direct_tyre_update(command, data)
+            return
+
+        # Exchange response: frame[3] = 0x30 (48) indicates success
+        if command == 48:  # 0x30
+            if len(data) >= 2:
+                self._handle_exchange_tyres(data)
+            return
+
+        # Legacy handling for other command patterns
+        if command == Command.TYRE_STATE:
+            self._handle_tyre_state(data)
         elif command == Command.QUERY_ID:
             self._handle_query_id(data)
-        elif command == Command.EXCHANGE_TIRES:
-            self._handle_exchange_tires(data)
-        # Handle direct tire position updates (based on debug logs)
-        elif command in [0, 1, 16, 17]:  # These appear to be direct position codes
-            self._handle_direct_tire_update(command, data)
-        elif command == 5:  # Spare tire
-            self._handle_direct_tire_update(command, data)
+        elif command == Command.EXCHANGE_TYRES:
+            self._handle_exchange_tyres(data)
         # Handle pairing response (from FrameDecode3.java)
         elif command == Command.HEARTBEAT and len(data) > 0:
             # Log all HEARTBEAT commands for debugging
@@ -416,64 +514,63 @@ class TPMSDevice:
 
         # Map position codes to enum values (from FrameDecode3.java)
         position_map = {
-            0: TirePosition.FRONT_LEFT,  # Left Front
-            1: TirePosition.FRONT_RIGHT,  # Right Front
-            16: TirePosition.REAR_LEFT,  # Left Rear
-            17: TirePosition.REAR_RIGHT,  # Right Rear
-            5: TirePosition.SPARE_TIRE,  # Spare Tire
+            0: TyrePosition.FRONT_LEFT,  # Left Front
+            1: TyrePosition.FRONT_RIGHT,  # Right Front
+            16: TyrePosition.REAR_LEFT,  # Left Rear
+            17: TyrePosition.REAR_RIGHT,  # Right Rear
+            5: TyrePosition.SPARE_TYRE,  # Spare Tyre
         }
 
         if position_code in position_map:
             position = position_map[position_code]
 
-            # Get the tire ID (if available)
-            tire_id = self.tire_states[position].tire_id
-            if not tire_id:
+            # Get the tyre ID (if available)
+            tyre_id = self.tyre_states[position].tyre_id
+            if not tyre_id:
                 # If no ID is available, generate one based on position
-                tire_id = f"SENSOR_{position.name}"
-                self.tire_states[position].tire_id = tire_id
+                tyre_id = f"SENSOR_{position.name}"
+                self.tyre_states[position].tyre_id = tyre_id
 
-            logger.info(f"Pairing complete for {position.name}: ID {tire_id}")
+            logger.info(f"Pairing complete for {position.name}: ID {tyre_id}")
 
             # Call pairing callback if registered
-            if self.on_pairing_complete:
-                self.on_pairing_complete(position, tire_id)
+            self._invoke_callback(self.on_pairing_complete, position, tyre_id)
 
             # Query sensor IDs to get the actual ID
             self.query_sensor_ids()
         else:
             logger.warning(
-                f"Unknown tire position code in pairing response: {position_code}"
+                f"Unknown tyre position code in pairing response: {position_code}"
             )
 
-    def _handle_direct_tire_update(self, position_code: int, data: List[int]):
-        """Handle direct tire state updates where the command is the position code"""
+    def _handle_direct_tyre_update(self, position_code: int, data: List[int]):
+        """Handle direct tyre state updates where the command is the position code."""
         if len(data) < 2:
             logger.warning(
-                f"Invalid direct tire update data for position {position_code}"
+                f"Invalid direct tyre update data for position {position_code}"
             )
             return
 
         # Map position codes to enum values
         position_map = {
-            0: TirePosition.FRONT_LEFT,
-            1: TirePosition.FRONT_RIGHT,
-            16: TirePosition.REAR_LEFT,
-            17: TirePosition.REAR_RIGHT,
-            5: TirePosition.SPARE_TIRE,
+            0: TyrePosition.FRONT_LEFT,
+            1: TyrePosition.FRONT_RIGHT,
+            16: TyrePosition.REAR_LEFT,
+            17: TyrePosition.REAR_RIGHT,
+            5: TyrePosition.SPARE_TYRE,
         }
 
         if position_code not in position_map:
-            logger.warning(f"Unknown tire position code: {position_code}")
+            logger.warning(f"Unknown tyre position code: {position_code}")
             return
 
         position = position_map[position_code]
-        tire_state = self.tire_states[position]
+        tyre_state = self.tyre_states[position]
 
         # Store previous pressure for change detection
-        previous_pressure = tire_state.air_pressure
+        previous_pressure = tyre_state.air_pressure
 
-        # Update tire state based on the data format observed in logs
+        # Update tyre state based on the data format observed in logs
         # Format appears to be [pressure, temperature, flags]
         pressure_raw = data[0]
         temp_raw = data[1]
@@ -482,88 +579,85 @@ class TPMSDevice:
             flags = data[2]
 
         # Convert raw values to actual values
-        tire_state.air_pressure = int(pressure_raw * 3.44)  # Convert to kPa
-        tire_state.temperature = temp_raw - 50  # Convert to Celsius
+        tyre_state.air_pressure = int(pressure_raw * 3.44)  # Convert to kPa
+        tyre_state.temperature = temp_raw - 50  # Convert to Celsius
 
         # Parse flags if present
-        tire_state.no_signal = bool(flags & 0x20)
-        tire_state.is_leaking = bool(flags & 0x08)
-        tire_state.is_low_power = bool(flags & 0x04)
+        tyre_state.no_signal = bool(flags & 0x20)
+        tyre_state.is_leaking = bool(flags & 0x08)
+        tyre_state.is_low_power = bool(flags & 0x04)
 
         # Update timestamp
-        tire_state.last_update = time.time()
+        tyre_state.last_update = time.time()
 
-        logger.debug(f"Updated tire state for {position.name}: {tire_state}")
+        logger.debug(f"Updated tyre state for {position.name}: {tyre_state}")
 
         # Call callback if registered
-        if self.on_tire_state_update:
-            self.on_tire_state_update(position, tire_state)
+        self._invoke_callback(self.on_tyre_state_update, position, tyre_state)
 
         # Check for significant pressure change (which might indicate pairing)
         # If pressure was 0 and now it's not, or if it changed by more than 20 kPa
-        if (previous_pressure == 0 and tire_state.air_pressure > 0) or abs(
-            tire_state.air_pressure - previous_pressure
+        if (previous_pressure == 0 and tyre_state.air_pressure > 0) or abs(
+            tyre_state.air_pressure - previous_pressure
         ) > 20:
             logger.info(
-                f"Significant pressure change detected for {position.name}: {previous_pressure} -> {tire_state.air_pressure} kPa"
+                f"Significant pressure change detected for {position.name}: {previous_pressure} -> {tyre_state.air_pressure} kPa"
             )
 
-            # Get or generate tire ID
-            tire_id = tire_state.tire_id
-            if not tire_id:
+            # Get or generate tyre ID
+            tyre_id = tyre_state.tyre_id
+            if not tyre_id:
                 # If no ID is available, generate one based on position
-                tire_id = f"SENSOR_{position.name}"
-                tire_state.tire_id = tire_id
+                tyre_id = f"SENSOR_{position.name}"
+                tyre_state.tyre_id = tyre_id
 
-            logger.info(f"Auto-pairing detected for {position.name}: ID {tire_id}")
+            logger.info(f"Auto-pairing detected for {position.name}: ID {tyre_id}")
 
             # Call pairing callback if registered
-            if self.on_pairing_complete:
-                self.on_pairing_complete(position, tire_id)
+            self._invoke_callback(self.on_pairing_complete, position, tyre_id)
 
-    def _handle_tire_state(self, data: List[int]):
-        """Handle tire state update"""
+    def _handle_tyre_state(self, data: List[int]):
+        """Handle tyre state update"""
         if len(data) < 4:
-            logger.warning("Invalid tire state data")
+            logger.warning("Invalid tyre state data")
             return
 
-        # Parse tire position
+        # Parse tyre position
         position_code = data[0]
         position = None
 
         if position_code == 0:
-            position = TirePosition.FRONT_LEFT
+            position = TyrePosition.FRONT_LEFT
         elif position_code == 1:
-            position = TirePosition.FRONT_RIGHT
+            position = TyrePosition.FRONT_RIGHT
         elif position_code == 16:
-            position = TirePosition.REAR_LEFT
+            position = TyrePosition.REAR_LEFT
         elif position_code == 17:
-            position = TirePosition.REAR_RIGHT
+            position = TyrePosition.REAR_RIGHT
         elif position_code == 5:
-            position = TirePosition.SPARE_TIRE
+            position = TyrePosition.SPARE_TYRE
         else:
-            logger.warning(f"Unknown tire position code: {position_code}")
+            logger.warning(f"Unknown tyre position code: {position_code}")
             return
 
-        # Get tire state
-        tire_state = self.tire_states[position]
+        # Get tyre state
+        tyre_state = self.tyre_states[position]
 
-        # Update tire state
-        tire_state.air_pressure = int(data[1] * 3.44)  # Convert to kPa
-        tire_state.temperature = data[2] - 50  # Convert to Celsius
+        # Update tyre state
+        tyre_state.air_pressure = int(data[1] * 3.44)  # Convert to kPa
+        tyre_state.temperature = data[2] - 50  # Convert to Celsius
 
         # Parse flags
         flags = data[3]
-        tire_state.no_signal = bool(flags & 0x20)
-        tire_state.is_leaking = bool(flags & 0x08)
-        tire_state.is_low_power = bool(flags & 0x04)
+        tyre_state.no_signal = bool(flags & 0x20)
+        tyre_state.is_leaking = bool(flags & 0x08)
+        tyre_state.is_low_power = bool(flags & 0x04)
 
         # Update timestamp
-        tire_state.last_update = time.time()
+        tyre_state.last_update = time.time()
 
         # Call callback if registered
-        if self.on_tire_state_update:
-            self.on_tire_state_update(position, tire_state)
+        self._invoke_callback(self.on_tyre_state_update, position, tyre_state)
 
     def _handle_query_id(self, data: List[int]):
         """Handle query ID response
@@ -578,7 +672,7 @@ class TPMSDevice:
         - 2 = Right Front (FRONT_RIGHT)
         - 3 = Left Rear (REAR_LEFT)
         - 4 = Right Rear (REAR_RIGHT)
-        - 5 = Spare Tire (SPARE_TIRE)
+        - 5 = Spare Tyre (SPARE_TYRE)
         """
         # Log the raw data for debugging
         logger.info(f"Received query ID response: {[f'{b:02X}' for b in data]}")
@@ -587,17 +681,17 @@ class TPMSDevice:
             logger.warning(f"Query ID response too short: {data}")
             return
 
-        # Parse tire position according to the Android app
+        # Parse tyre position according to the Android app
         position_code = data[0]
         position = None
 
         # Map position codes to enum values (from FrameDecode3.java)
         position_map = {
-            1: TirePosition.FRONT_LEFT,  # Left Front
-            2: TirePosition.FRONT_RIGHT,  # Right Front
-            3: TirePosition.REAR_LEFT,  # Left Rear
-            4: TirePosition.REAR_RIGHT,  # Right Rear
-            5: TirePosition.SPARE_TIRE,  # Spare Tire
+            1: TyrePosition.FRONT_LEFT,  # Left Front
+            2: TyrePosition.FRONT_RIGHT,  # Right Front
+            3: TyrePosition.REAR_LEFT,  # Left Rear
+            4: TyrePosition.REAR_RIGHT,  # Right Rear
+            5: TyrePosition.SPARE_TYRE,  # Spare Tyre
         }
 
         if position_code in position_map:
@@ -607,23 +701,22 @@ class TPMSDevice:
             # paire2.mID = Util.byteToUpperString(frame[4]) + Util.byteToUpperString(frame[5]) +
             #              Util.byteToUpperString(frame[6]) + Util.byteToUpperString(frame[7]);
             # In our case, data starts at frame[4], so we need data[0:4]
-            tire_id = "".join(f"{b:02X}" for b in data[1:5])
+            tyre_id = "".join(f"{b:02X}" for b in data[1:5])
 
-            # Update tire state
-            self.tire_states[position].tire_id = tire_id
+            # Update tyre state
+            self.tyre_states[position].tyre_id = tyre_id
 
-            logger.info(f"Tire ID for position {position.name}: {tire_id}")
+            logger.info(f"Tyre ID for position {position.name}: {tyre_id}")
 
             # Call pairing callback if registered
-            if self.on_pairing_complete:
-                self.on_pairing_complete(position, tire_id)
+            self._invoke_callback(self.on_pairing_complete, position, tyre_id)
         else:
-            logger.warning(f"Unknown tire position code: {position_code}")
+            logger.warning(f"Unknown tyre position code: {position_code}")
 
-    def _handle_exchange_tires(self, data: List[int]):
-        """Handle tire exchange response"""
+    def _handle_exchange_tyres(self, data: List[int]):
+        """Handle tyre exchange response"""
         if len(data) < 2:
-            logger.warning("Invalid tire exchange data")
+            logger.warning("Invalid tyre exchange data")
             return
 
         # Get positions
@@ -632,11 +725,11 @@ class TPMSDevice:
 
         # Map position codes to enum values
         position_map = {
-            0: TirePosition.FRONT_LEFT,
-            1: TirePosition.FRONT_RIGHT,
-            16: TirePosition.REAR_LEFT,
-            17: TirePosition.REAR_RIGHT,
-            5: TirePosition.SPARE_TIRE,
+            0: TyrePosition.FRONT_LEFT,
+            1: TyrePosition.FRONT_RIGHT,
+            16: TyrePosition.REAR_LEFT,
+            17: TyrePosition.REAR_RIGHT,
+            5: TyrePosition.SPARE_TYRE,
         }
 
         # Get position names
@@ -644,169 +737,139 @@ class TPMSDevice:
             position1 = position_map[pos1]
             position2 = position_map[pos2]
 
-            logger.info(f"Tires exchanged: {position1.name} and {position2.name}")
+            logger.info(f"Tyres exchanged: {position1.name} and {position2.name}")
 
             # Call callback if registered
-            if self.on_exchange_complete:
-                self.on_exchange_complete(position1, position2)
+            self._invoke_callback(self.on_exchange_complete, position1, position2)
 
     def _send_command(self, command: int, data: List[int]) -> bool:
-        """Send a command to the TPMS device"""
+        """Send a command to the TPMS device using create_frame."""
         if not self.serial or not self.serial.is_open:
             logger.error("Not connected to device")
             return False
 
         frame = self.protocol.create_frame(command, data)
         try:
+            hex_frame = " ".join(f"{b:02X}" for b in frame)
+            logger.debug(f"Sending frame: {hex_frame}")
             self.serial.write(frame)
             return True
         except serial.SerialException as e:
             logger.error(f"Failed to send command: {e}")
             return False
 
-    def _send_heartbeat(self) -> bool:
-        """Send heartbeat command"""
-        return self._send_command(Command.HEARTBEAT, [25, 0, 0xE0])
+    def _send_raw_frame(self, frame_without_checksum: List[int]) -> bool:
+        """Send a raw frame, calculating and appending the checksum.
 
-    def query_sensor_ids(self) -> bool:
-        """Query all sensor IDs
+        This mimics the Java PackBufferFrameEn.send() which calculates
+        checksum and sets frame[length-1] before writing.
 
-        This method sends the same command as the Android app to query sensor IDs.
-        The command is [0x55, 0xAA, 0x06, 0x07, 0x00, 0x00].
+        Args:
+            frame_without_checksum: Frame bytes with placeholder (usually 0) for checksum
         """
-        # Send the exact same command as the Android app
-        # From FrameEncode3.java: this.FrameEn.send(new byte[]{85, -86, 6, 7, 0, 0});
-        # 85 = 0x55, -86 = 0xAA (signed byte), 6 = length, 7 = command code
-        frame = bytes([0x55, 0xAA, 0x06, 0x07, 0x00, 0x00])
-
-        try:
-            self.serial.write(frame)
-            logger.info("Sent query sensor IDs command (Android app format)")
-            return True
-        except serial.SerialException as e:
-            logger.error(f"Failed to send query sensor IDs command: {e}")
+        if not self.serial or not self.serial.is_open:
+            logger.error("Not connected to device")
             return False
 
-    def pair_sensor(self, position: TirePosition) -> bool:
-        """Start pairing a sensor for the specified position
+        frame = bytearray(frame_without_checksum)
+        frame[-1] = TPMSProtocol.calc_checksum(frame)
 
-        This method sends the exact same command as the Android app for pairing.
+        try:
+            hex_frame = " ".join(f"{b:02X}" for b in frame)
+            logger.debug(f"Sending raw frame: {hex_frame}")
+            self.serial.write(bytes(frame))
+            time.sleep(0.06)  # 60ms delay between commands (from Java)
+            return True
+        except serial.SerialException as e:
+            logger.error(f"Failed to send raw frame: {e}")
+            return False
+
+    def _send_heartbeat(self) -> bool:
+        """Send heartbeat command.
+
+        From FrameEncode3.SendHeartbeat: [85, -86, 6, 25, 0, -32]
+        Note: The -32 (0xE0) is NOT the checksum - it's data. Checksum is calculated.
+        """
+        # Frame: [0x55, 0xAA, 0x06, 0x19, 0x00, checksum]
+        return self._send_raw_frame([0x55, 0xAA, 0x06, 0x19, 0x00, 0x00])
+
+    def query_sensor_ids(self) -> bool:
+        """Query all sensor IDs.
+
+        From FrameEncode3.querySensorID: [85, -86, 6, 7, 0, 0]
+        Frame: [0x55, 0xAA, 0x06, 0x07, 0x00, checksum]
+        """
+        logger.info("Sending query sensor IDs command")
+        return self._send_raw_frame([0x55, 0xAA, 0x06, 0x07, 0x00, 0x00])
+
+    def pair_sensor(self, position: TyrePosition) -> bool:
+        """Start pairing a sensor for the specified position.
+
         From FrameEncode3.java:
         - paireFrontLeft: [85, -86, 6, 1, 0, 0]
         - paireFrontRight: [85, -86, 6, 1, 1, 0]
         - paireBackLeft: [85, -86, 6, 1, 16, 0]
         - paireBackRight: [85, -86, 6, 1, 17, 0]
         - paireSpTired: [85, -86, 6, 1, 5, 0]
+
+        Frame: [0x55, 0xAA, 0x06, 0x01, position_code, checksum]
+        Position codes: FL=0, FR=1, RL=16, RR=17, Spare=5
         """
         position_code = {
-            TirePosition.FRONT_LEFT: 0,
-            TirePosition.FRONT_RIGHT: 1,
-            TirePosition.REAR_LEFT: 16,
-            TirePosition.REAR_RIGHT: 17,
-            TirePosition.SPARE_TIRE: 5,
+            TyrePosition.FRONT_LEFT: 0,
+            TyrePosition.FRONT_RIGHT: 1,
+            TyrePosition.REAR_LEFT: 16,
+            TyrePosition.REAR_RIGHT: 17,
+            TyrePosition.SPARE_TYRE: 5,
         }[position]
 
-        # Send the exact same command as the Android app
-        # [85, -86, 6, 1, position_code, 0]
-        # 85 = 0x55, -86 = 0xAA (signed byte), 6 = length, 1 = command code
-        frame = bytes([0x55, 0xAA, 0x06, 0x01, position_code, 0x00])
-
-        try:
-            self.serial.write(frame)
-            logger.info(
-                f"Sent pair sensor command for {position.name} (Android app format)"
-            )
-            return True
-        except serial.SerialException as e:
-            logger.error(f"Failed to send pair sensor command: {e}")
-            return False
+        logger.info(f"Sending pair sensor command for {position.name}")
+        return self._send_raw_frame([0x55, 0xAA, 0x06, 0x01, position_code, 0x00])
 
     def stop_pairing(self) -> bool:
-        """Stop the pairing process
+        """Stop the pairing process.
 
-        This method sends the exact same command as the Android app for stopping pairing.
-        From FrameEncode3.java:
-        - stopPaire: [85, -86, 6, 6, 0, 0]
+        From FrameEncode3.stopPaire: [85, -86, 6, 6, 0, 0]
+        Frame: [0x55, 0xAA, 0x06, 0x06, 0x00, checksum]
         """
-        # Send the exact same command as the Android app
-        # [85, -86, 6, 6, 0, 0]
-        # 85 = 0x55, -86 = 0xAA (signed byte), 6 = length, 6 = command code
-        frame = bytes([0x55, 0xAA, 0x06, 0x06, 0x00, 0x00])
+        logger.info("Sending stop pairing command")
+        return self._send_raw_frame([0x55, 0xAA, 0x06, 0x06, 0x00, 0x00])
 
-        try:
-            self.serial.write(frame)
-            logger.info("Sent stop pairing command (Android app format)")
-            return True
-        except serial.SerialException as e:
-            logger.error(f"Failed to send stop pairing command: {e}")
-            return False
+    def exchange_tyres(self, position1: TyrePosition, position2: TyrePosition) -> bool:
+        """Exchange two tyre positions.
 
-    def exchange_tires(self, position1: TirePosition, position2: TirePosition) -> bool:
-        """Exchange two tire positions
-
-        This method sends the exact same command as the Android app for exchanging tire positions.
-        From FrameEncode3.java:
-        - exchangeLeftFrontRightFront: [85, -86, 7, 3, 0, 1, 0]
-        - exchangeLeftFrontLeftBack: [85, -86, 7, 3, 0, 16, 0]
-        - exchangeLeftFrontRightBack: [85, -86, 7, 3, 0, 17, 0]
-        - exchangeRightFrontLeftBack: [85, -86, 7, 3, 1, 16, 0]
-        - exchangeRightFrontRightBack: [85, -86, 7, 3, 1, 17, 0]
-        - exchangeLeftBackRightBack: [85, -86, 7, 3, 16, 17, 0]
-        - exchange_sp_fl: [85, -86, 7, 3, 0, 5, 0]
-        - exchange_sp_fr: [85, -86, 7, 3, 1, 5, 0]
-        - exchange_sp_bl: [85, -86, 7, 3, 16, 5, 0]
-        - exchange_sp_br: [85, -86, 7, 3, 17, 5, 0]
+        From FrameEncode3.java exchange methods.
+        Frame: [0x55, 0xAA, 0x07, 0x03, pos1, pos2, checksum]
+        Position codes: FL=0, FR=1, RL=16, RR=17, Spare=5
         """
         position_code1 = {
-            TirePosition.FRONT_LEFT: 0,
-            TirePosition.FRONT_RIGHT: 1,
-            TirePosition.REAR_LEFT: 16,
-            TirePosition.REAR_RIGHT: 17,
-            TirePosition.SPARE_TIRE: 5,
+            TyrePosition.FRONT_LEFT: 0,
+            TyrePosition.FRONT_RIGHT: 1,
+            TyrePosition.REAR_LEFT: 16,
+            TyrePosition.REAR_RIGHT: 17,
+            TyrePosition.SPARE_TYRE: 5,
         }[position1]
 
         position_code2 = {
-            TirePosition.FRONT_LEFT: 0,
-            TirePosition.FRONT_RIGHT: 1,
-            TirePosition.REAR_LEFT: 16,
-            TirePosition.REAR_RIGHT: 17,
-            TirePosition.SPARE_TIRE: 5,
+            TyrePosition.FRONT_LEFT: 0,
+            TyrePosition.FRONT_RIGHT: 1,
+            TyrePosition.REAR_LEFT: 16,
+            TyrePosition.REAR_RIGHT: 17,
+            TyrePosition.SPARE_TYRE: 5,
         }[position2]
 
-        # Send the exact same command as the Android app
-        # [85, -86, 7, 3, position_code1, position_code2, 0]
-        # 85 = 0x55, -86 = 0xAA (signed byte), 7 = length, 3 = command code
-        frame = bytes([0x55, 0xAA, 0x07, 0x03, position_code1, position_code2, 0x00])
-
-        try:
-            self.serial.write(frame)
-            logger.info(
-                f"Sent exchange tires command for {position1.name} and {position2.name} (Android app format)"
-            )
-            return True
-        except serial.SerialException as e:
-            logger.error(f"Failed to send exchange tires command: {e}")
-            return False
+        logger.info(f"Sending exchange tyres command: {position1.name} <-> {position2.name}")
+        return self._send_raw_frame([0x55, 0xAA, 0x07, 0x03, position_code1, position_code2, 0x00])
 
     def reset_device(self) -> bool:
-        """Reset the TPMS device
+        """Reset the TPMS device.
 
-        This method sends the exact same command as the Android app for resetting the device.
-        From FrameEncode3.java:
-        - reset_dev: [85, -86, 6, 88, 85, -32]
+        From FrameEncode3.reset_dev: [85, -86, 6, 88, 85, -32]
+        Frame: [0x55, 0xAA, 0x06, 0x58, 0x55, checksum]
+        Note: 0x58=88 is command, 0x55=85 is data
         """
-        # Send the exact same command as the Android app
-        # [85, -86, 6, 88, 85, -32]
-        # 85 = 0x55, -86 = 0xAA (signed byte), 6 = length, 88 = command code, 85 = data, -32 = 0xE0 (signed byte)
-        frame = bytes([0x55, 0xAA, 0x06, 0x58, 0x55, 0xE0])
-
-        try:
-            self.serial.write(frame)
-            logger.info("Sent reset device command (Android app format)")
-            return True
-        except serial.SerialException as e:
-            logger.error(f"Failed to send reset device command: {e}")
-            return False
+        logger.info("Sending reset device command")
+        return self._send_raw_frame([0x55, 0xAA, 0x06, 0x58, 0x55, 0x00])
 
     def set_high_pressure_threshold(self, pressure: int) -> None:
         """Set high pressure threshold in kPa"""
@@ -820,32 +883,34 @@ class TPMSDevice:
         """Set high temperature threshold in Celsius"""
         self.high_temp_threshold = temp
 
-    def set_spare_tire_enabled(self, enabled: bool) -> None:
-        """Enable or disable spare tire monitoring"""
-        self.spare_tire_enabled = enabled
+    def set_spare_tyre_enabled(self, enabled: bool) -> None:
+        """Enable or disable spare tyre monitoring"""
+        self.spare_tyre_enabled = enabled
 
-    def get_tire_state(self, position: TirePosition) -> TireState:
-        """Get the current state of a tire"""
-        return self.tire_states[position]
+    def get_tyre_state(self, position: TyrePosition) -> TyreState:
+        """Get the current state of a tyre."""
+        with self._lock:
+            return self.tyre_states[position]
 
-    def get_all_tire_states(self) -> Dict[TirePosition, TireState]:
-        """Get the current state of all tires"""
-        return self.tire_states.copy()
+    def get_all_tyre_states(self) -> Dict[TyrePosition, TyreState]:
+        """Get the current state of all tyres."""
+        with self._lock:
+            return self.tyre_states.copy()
 
-    def register_tire_state_callback(
-        self, callback: Callable[[TirePosition, TireState], None]
+    def register_tyre_state_callback(
+        self, callback: Callable[[TyrePosition, TyreState], None]
     ) -> None:
-        """Register a callback for tire state updates"""
-        self.on_tire_state_update = callback
+        """Register a callback for tyre state updates"""
+        self.on_tyre_state_update = callback
 
     def register_pairing_callback(
-        self, callback: Callable[[TirePosition, str], None]
+        self, callback: Callable[[TyrePosition, str], None]
     ) -> None:
         """Register a callback for pairing completion"""
         self.on_pairing_complete = callback
 
     def register_exchange_callback(
-        self, callback: Callable[[TirePosition, TirePosition], None]
+        self, callback: Callable[[TyrePosition, TyrePosition], None]
     ) -> None:
-        """Register a callback for tire exchange completion"""
+        """Register a callback for tyre exchange completion"""
         self.on_exchange_complete = callback
