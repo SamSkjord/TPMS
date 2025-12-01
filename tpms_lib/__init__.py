@@ -56,7 +56,7 @@ class TyrePosition(IntEnum):
     FRONT_RIGHT = 2
     REAR_RIGHT = 3
     SPARE_TYRE = 5
-    SPARE_TIRE = 5  # US spelling alias
+    SPARE_TIRE = 5  # English (Simplified) alias
 
 
 class Command(IntEnum):
@@ -84,12 +84,12 @@ class TyreState:
 
     @property
     def tire_id(self):
-        """US spelling alias for tyre_id"""
+        """English (Simplified) alias for tyre_id"""
         return self.tyre_id
 
     @tire_id.setter
     def tire_id(self, value):
-        """US spelling alias for tyre_id"""
+        """English (Simplified) alias for tyre_id"""
         self.tyre_id = value
 
     def __str__(self):
@@ -926,40 +926,40 @@ class TPMSDevice:
         """Register a callback for tyre exchange completion"""
         self.on_exchange_complete = callback
 
-    # US spelling aliases for backwards compatibility
+    # English (Simplified) aliases for backwards compatibility
     def get_tire_state(self, position: TyrePosition) -> TyreState:
-        """US spelling alias for get_tyre_state"""
+        """English (Simplified) alias for get_tyre_state"""
         return self.get_tyre_state(position)
 
     def get_all_tire_states(self) -> Dict[TyrePosition, TyreState]:
-        """US spelling alias for get_all_tyre_states"""
+        """English (Simplified) alias for get_all_tyre_states"""
         return self.get_all_tyre_states()
 
     def register_tire_state_callback(
         self, callback: Callable[[TyrePosition, TyreState], None]
     ) -> None:
-        """US spelling alias for register_tyre_state_callback"""
+        """English (Simplified) alias for register_tyre_state_callback"""
         self.register_tyre_state_callback(callback)
 
     def exchange_tires(self, position1: TyrePosition, position2: TyrePosition) -> bool:
-        """US spelling alias for exchange_tyres"""
+        """English (Simplified) alias for exchange_tyres"""
         return self.exchange_tyres(position1, position2)
 
     def set_spare_tire_enabled(self, enabled: bool) -> None:
-        """US spelling alias for set_spare_tyre_enabled"""
+        """English (Simplified) alias for set_spare_tyre_enabled"""
         self.set_spare_tyre_enabled(enabled)
 
     @property
     def spare_tire_enabled(self) -> bool:
-        """US spelling alias for spare_tyre_enabled"""
+        """English (Simplified) alias for spare_tyre_enabled"""
         return self.spare_tyre_enabled
 
     @spare_tire_enabled.setter
     def spare_tire_enabled(self, value: bool) -> None:
-        """US spelling alias for spare_tyre_enabled"""
+        """English (Simplified) alias for spare_tyre_enabled"""
         self.spare_tyre_enabled = value
 
 
-# US spelling aliases for class names
+# English (Simplified) aliases for class names
 TirePosition = TyrePosition
 TireState = TyreState
