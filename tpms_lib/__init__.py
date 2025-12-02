@@ -16,10 +16,7 @@ from typing import Dict, List, Optional, Tuple, Callable
 import serial
 import serial.tools.list_ports
 
-# Configure logging
-logging.basicConfig(
-    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-)
+# Get logger (library should not configure logging - leave that to the application)
 logger = logging.getLogger("tpms_python.tpms_lib")
 
 # Constants
@@ -27,26 +24,6 @@ DEFAULT_TIMEOUT = 1.0  # seconds
 DEFAULT_BAUDRATE = 19200  # Correct baudrate for this TPMS device
 # Alternative baudrates to try if the default doesn't work
 ALTERNATIVE_BAUDRATES = [9600, 115200, 38400, 57600]
-
-# Position code mappings used in protocol
-# Pairing/tyre state use: FL=0, FR=1, RL=16, RR=17, Spare=5
-# Query ID responses use: FL=1, FR=2, RL=3, RR=4, Spare=5
-POSITION_CODE_TO_TYRE = {
-    0: "FRONT_LEFT",
-    1: "FRONT_RIGHT",
-    16: "REAR_LEFT",
-    17: "REAR_RIGHT",
-    5: "SPARE_TYRE",
-}
-
-QUERY_ID_CODE_TO_TYRE = {
-    1: "FRONT_LEFT",
-    2: "FRONT_RIGHT",
-    3: "REAR_LEFT",
-    4: "REAR_RIGHT",
-    5: "SPARE_TYRE",
-}
-
 
 class TyrePosition(IntEnum):
     """Enum representing tyre positions."""
@@ -59,14 +36,49 @@ class TyrePosition(IntEnum):
     SPARE_TIRE = 5  # English (Simplified) alias
 
 
-class Command(IntEnum):
-    """Command codes used in the TPMS protocol"""
+# Position code mappings used in protocol
+# Tyre state/pairing commands use: FL=0, FR=1, RL=16, RR=17, Spare=5
+# Query ID responses use: FL=1, FR=2, RL=3, RR=4, Spare=5
 
-    HEARTBEAT = 6
-    EXCHANGE_TYRES = 7
-    TYRE_STATE = 8
-    QUERY_ID = 9
-    RESET = 10
+# Protocol position code -> TyrePosition (for receiving tyre state/pairing)
+POSITION_CODE_TO_TYRE = {
+    0: TyrePosition.FRONT_LEFT,
+    1: TyrePosition.FRONT_RIGHT,
+    16: TyrePosition.REAR_LEFT,
+    17: TyrePosition.REAR_RIGHT,
+    5: TyrePosition.SPARE_TYRE,
+}
+
+# TyrePosition -> Protocol position code (for sending commands)
+TYRE_TO_POSITION_CODE = {
+    TyrePosition.FRONT_LEFT: 0,
+    TyrePosition.FRONT_RIGHT: 1,
+    TyrePosition.REAR_LEFT: 16,
+    TyrePosition.REAR_RIGHT: 17,
+    TyrePosition.SPARE_TYRE: 5,
+}
+
+# Query ID response position code -> TyrePosition
+QUERY_ID_CODE_TO_TYRE = {
+    1: TyrePosition.FRONT_LEFT,
+    2: TyrePosition.FRONT_RIGHT,
+    3: TyrePosition.REAR_LEFT,
+    4: TyrePosition.REAR_RIGHT,
+    5: TyrePosition.SPARE_TYRE,
+}
+
+
+class FrameLength(IntEnum):
+    """Frame lengths used in the TPMS protocol.
+
+    The length byte in the protocol doubles as a message type discriminator.
+    These values represent the total frame size (headers + data + checksum).
+    """
+
+    COMMAND = 6       # Pairing, heartbeat, stop, query, reset commands
+    EXCHANGE = 7      # Tyre exchange
+    TYRE_STATE = 8    # Tyre state updates
+    QUERY_ID = 9      # Query ID responses
 
 
 class TyreState:
@@ -460,15 +472,16 @@ class TPMSDevice:
                 self._handle_exchange_tyres(data)
             return
 
-        # Legacy handling for other command patterns
-        if command == Command.TYRE_STATE:
+        # Legacy handling for other command patterns (frame[3] values that match frame lengths)
+        # These may occur in certain device firmware versions
+        if command == 8:  # FrameLength.TYRE_STATE
             self._handle_tyre_state(data)
-        elif command == Command.QUERY_ID:
+        elif command == 9:  # FrameLength.QUERY_ID
             self._handle_query_id(data)
-        elif command == Command.EXCHANGE_TYRES:
+        elif command == 7:  # FrameLength.EXCHANGE
             self._handle_exchange_tyres(data)
         # Handle pairing response (from FrameDecode3.java)
-        elif command == Command.HEARTBEAT and len(data) > 0:
+        elif command == 6 and len(data) > 0:  # FrameLength.COMMAND
             # Log all HEARTBEAT commands for debugging
             logger.debug(
                 f"HEARTBEAT command received: data={[f'{b:02X}' for b in data]}"
@@ -521,19 +534,9 @@ class TPMSDevice:
 
         # Get position code from data[1]
         position_code = data[1]
-        position = None
 
-        # Map position codes to enum values (from FrameDecode3.java)
-        position_map = {
-            0: TyrePosition.FRONT_LEFT,  # Left Front
-            1: TyrePosition.FRONT_RIGHT,  # Right Front
-            16: TyrePosition.REAR_LEFT,  # Left Rear
-            17: TyrePosition.REAR_RIGHT,  # Right Rear
-            5: TyrePosition.SPARE_TYRE,  # Spare Tyre
-        }
-
-        if position_code in position_map:
-            position = position_map[position_code]
+        if position_code in POSITION_CODE_TO_TYRE:
+            position = POSITION_CODE_TO_TYRE[position_code]
 
             # Get the tyre ID (if available)
             tyre_id = self.tyre_states[position].tyre_id
@@ -562,20 +565,11 @@ class TPMSDevice:
             )
             return
 
-        # Map position codes to enum values
-        position_map = {
-            0: TyrePosition.FRONT_LEFT,
-            1: TyrePosition.FRONT_RIGHT,
-            16: TyrePosition.REAR_LEFT,
-            17: TyrePosition.REAR_RIGHT,
-            5: TyrePosition.SPARE_TYRE,
-        }
-
-        if position_code not in position_map:
+        if position_code not in POSITION_CODE_TO_TYRE:
             logger.warning(f"Unknown tyre position code: {position_code}")
             return
 
-        position = position_map[position_code]
+        position = POSITION_CODE_TO_TYRE[position_code]
         tyre_state = self.tyre_states[position]
 
         # Store previous pressure for change detection
@@ -635,21 +629,12 @@ class TPMSDevice:
 
         # Parse tyre position
         position_code = data[0]
-        position = None
 
-        if position_code == 0:
-            position = TyrePosition.FRONT_LEFT
-        elif position_code == 1:
-            position = TyrePosition.FRONT_RIGHT
-        elif position_code == 16:
-            position = TyrePosition.REAR_LEFT
-        elif position_code == 17:
-            position = TyrePosition.REAR_RIGHT
-        elif position_code == 5:
-            position = TyrePosition.SPARE_TYRE
-        else:
+        if position_code not in POSITION_CODE_TO_TYRE:
             logger.warning(f"Unknown tyre position code: {position_code}")
             return
+
+        position = POSITION_CODE_TO_TYRE[position_code]
 
         # Get tyre state
         tyre_state = self.tyre_states[position]
@@ -694,19 +679,9 @@ class TPMSDevice:
 
         # Parse tyre position according to the Android app
         position_code = data[0]
-        position = None
 
-        # Map position codes to enum values (from FrameDecode3.java)
-        position_map = {
-            1: TyrePosition.FRONT_LEFT,  # Left Front
-            2: TyrePosition.FRONT_RIGHT,  # Right Front
-            3: TyrePosition.REAR_LEFT,  # Left Rear
-            4: TyrePosition.REAR_RIGHT,  # Right Rear
-            5: TyrePosition.SPARE_TYRE,  # Spare Tyre
-        }
-
-        if position_code in position_map:
-            position = position_map[position_code]
+        if position_code in QUERY_ID_CODE_TO_TYRE:
+            position = QUERY_ID_CODE_TO_TYRE[position_code]
 
             # Parse ID (from FrameDecode3.java)
             # paire2.mID = Util.byteToUpperString(frame[4]) + Util.byteToUpperString(frame[5]) +
@@ -734,19 +709,10 @@ class TPMSDevice:
         pos1 = data[0]
         pos2 = data[1]
 
-        # Map position codes to enum values
-        position_map = {
-            0: TyrePosition.FRONT_LEFT,
-            1: TyrePosition.FRONT_RIGHT,
-            16: TyrePosition.REAR_LEFT,
-            17: TyrePosition.REAR_RIGHT,
-            5: TyrePosition.SPARE_TYRE,
-        }
-
         # Get position names
-        if pos1 in position_map and pos2 in position_map:
-            position1 = position_map[pos1]
-            position2 = position_map[pos2]
+        if pos1 in POSITION_CODE_TO_TYRE and pos2 in POSITION_CODE_TO_TYRE:
+            position1 = POSITION_CODE_TO_TYRE[pos1]
+            position2 = POSITION_CODE_TO_TYRE[pos2]
 
             logger.info(f"Tyres exchanged: {position1.name} and {position2.name}")
 
@@ -826,13 +792,7 @@ class TPMSDevice:
         Frame: [0x55, 0xAA, 0x06, 0x01, position_code, checksum]
         Position codes: FL=0, FR=1, RL=16, RR=17, Spare=5
         """
-        position_code = {
-            TyrePosition.FRONT_LEFT: 0,
-            TyrePosition.FRONT_RIGHT: 1,
-            TyrePosition.REAR_LEFT: 16,
-            TyrePosition.REAR_RIGHT: 17,
-            TyrePosition.SPARE_TYRE: 5,
-        }[position]
+        position_code = TYRE_TO_POSITION_CODE[position]
 
         logger.info(f"Sending pair sensor command for {position.name}")
         return self._send_raw_frame([0x55, 0xAA, 0x06, 0x01, position_code, 0x00])
@@ -853,21 +813,8 @@ class TPMSDevice:
         Frame: [0x55, 0xAA, 0x07, 0x03, pos1, pos2, checksum]
         Position codes: FL=0, FR=1, RL=16, RR=17, Spare=5
         """
-        position_code1 = {
-            TyrePosition.FRONT_LEFT: 0,
-            TyrePosition.FRONT_RIGHT: 1,
-            TyrePosition.REAR_LEFT: 16,
-            TyrePosition.REAR_RIGHT: 17,
-            TyrePosition.SPARE_TYRE: 5,
-        }[position1]
-
-        position_code2 = {
-            TyrePosition.FRONT_LEFT: 0,
-            TyrePosition.FRONT_RIGHT: 1,
-            TyrePosition.REAR_LEFT: 16,
-            TyrePosition.REAR_RIGHT: 17,
-            TyrePosition.SPARE_TYRE: 5,
-        }[position2]
+        position_code1 = TYRE_TO_POSITION_CODE[position1]
+        position_code2 = TYRE_TO_POSITION_CODE[position2]
 
         logger.info(f"Sending exchange tyres command: {position1.name} <-> {position2.name}")
         return self._send_raw_frame([0x55, 0xAA, 0x07, 0x03, position_code1, position_code2, 0x00])
